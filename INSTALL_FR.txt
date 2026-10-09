@@ -1,0 +1,29 @@
+FINISH 1.2.0 - Installation
+===========================
+
+WINDOWS (FL Studio, Ableton Live)
+  1. Copiez le dossier "FINISH.vst3" dans :
+       C:\Program Files\Common Files\VST3\
+  2. FL Studio : Options > Manage plugins > Find more plugins (ou "Start scan").
+     Ableton Live : Options > Preferences > Plug-ins > activez "Use VST3 Plug-in System Folders" puis "Rescan".
+
+macOS (FL Studio, Ableton Live, Logic)
+  1. VST3 : copiez "FINISH.vst3" dans  ~/Library/Audio/Plug-Ins/VST3/
+     AU   : copiez "FINISH.component" dans ~/Library/Audio/Plug-Ins/Components/
+  2. Si macOS bloque le plugin (il n'est pas notarié), ouvrez le Terminal et tapez :
+       xattr -dr com.apple.quarantine ~/Library/Audio/Plug-Ins/VST3/FINISH.vst3
+       xattr -dr com.apple.quarantine ~/Library/Audio/Plug-Ins/Components/FINISH.component
+  3. Relancez le scan des plugins dans votre DAW.
+
+UTILISATION
+  1. Placez FINISH en DERNIER sur la piste Master.
+  2. Appuyez sur le gros bouton rond FINISH, puis lancez la lecture du morceau en entier.
+  3. Arrêtez la lecture : la TRACK MAP apparaît (sections, transitions, score).
+     FINISH sélectionne automatiquement la plus grosse opportunité.
+  4. Cliquez une section ou un losange de transition. Comparez A / B / C :
+     cliquer une carte = PREVIEW (rejouez ce passage dans le DAW pour l'entendre).
+  5. APPLY applique la direction choisie, KEEP ORIGINAL laisse la section intacte,
+     REGENERATE propose 3 autres directions, UNDO revient en arrière.
+  6. Clic droit sur une section (ou clic sur "?") pour corriger son type.
+     Glissez une frontière pour déplacer un marqueur.
+  7. COHERENCE (potard blanc) garde le morceau homogène. A/B BYPASS compare à volume égal.

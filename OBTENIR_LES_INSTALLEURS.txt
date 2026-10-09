@@ -1,0 +1,47 @@
+FINISH - Obtenir l'installeur Mac (.pkg) et Windows (.exe)
+=========================================================
+
+GitHub fabrique gratuitement les deux installeurs à partir de ce dossier.
+Comptez environ 5 minutes de manipulations, puis environ 20 minutes d'attente.
+
+1. CRÉER LE DÉPÔT
+   - Créez un compte gratuit sur https://github.com (si vous n'en avez pas).
+   - En haut à droite, cliquez « + » puis « New repository ».
+   - Nom : FINISH. Cochez « Private ». Cliquez « Create repository ».
+
+2. ENVOYER LES FICHIERS
+   - Décompressez FINISH_V1.2.zip sur votre Mac.
+   - Ouvrez le dossier FINISH dans le Finder et appuyez sur Cmd + Maj + .  (point)
+     pour afficher les fichiers cachés. Le dossier « .github » doit apparaître :
+     il est indispensable, c'est lui qui contient la recette de fabrication.
+   - Sur la page du dépôt, cliquez « uploading an existing file ».
+   - Sélectionnez TOUT le contenu du dossier FINISH (Cmd + A), y compris .github,
+     et glissez-le dans la page. Attendez la fin du chargement.
+   - En bas, cliquez « Commit changes ».
+
+3. ATTENDRE LA FABRICATION
+   - Cliquez l'onglet « Actions » du dépôt. Un travail « Build FINISH » tourne.
+   - Au bout d'environ 20 minutes, il passe au vert (une coche).
+
+4. TÉLÉCHARGER
+   - Cliquez sur ce travail, puis descendez jusqu'à « Artifacts ».
+   - FINISH-macOS   -> contient FINISH-1.2.0-macOS.pkg
+   - FINISH-Windows -> contient FINISH-1.2.0-Windows-Setup.exe
+
+5. INSTALLER SUR MAC
+   - Double-cliquez FINISH-1.2.0-macOS.pkg.
+   - Si macOS dit « impossible de vérifier le développeur » : clic droit sur le .pkg,
+     puis « Ouvrir », puis « Ouvrir » encore (ou Réglages Système > Confidentialité
+     et sécurité > « Ouvrir quand même »).
+   - Le VST3 et l'AU s'installent dans /Library/Audio/Plug-Ins.
+   - Ableton Live : Réglages > Plug-ins > « Rescanner ».
+     FL Studio : Options > Manage plugins > « Find more plugins ».
+
+6. INSTALLER SUR WINDOWS
+   - Double-cliquez FINISH-1.2.0-Windows-Setup.exe.
+   - Si Windows affiche « Windows a protégé votre ordinateur » : « Informations
+     complémentaires », puis « Exécuter quand même ».
+   - Relancez le scan des plugins dans FL Studio ou Ableton.
+
+Si le travail passe au rouge dans Actions, envoyez une capture de la page :
+on corrige ensemble.

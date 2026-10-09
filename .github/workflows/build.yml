@@ -1,0 +1,123 @@
+name: Build FINISH
+
+# Builds ready-to-install files:
+#   macOS   : FINISH-<version>-macOS.pkg        (VST3 + AU, Apple Silicon + Intel)
+#   Windows : FINISH-<version>-Windows-Setup.exe (VST3, 64-bit)
+# plus plain zips, after running the offline tests and pluginval.
+# Download them from the "Artifacts" section of the run, or from the Release created when you push a tag (v1.2.0).
+
+on:
+  push:
+    branches: [ main, master ]
+    tags: [ 'v*' ]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  VERSION: 1.2.0
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows
+            os: windows-latest
+          - name: macOS
+            os: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DFINISH_BUILD_TESTS=ON
+
+      - name: Build plugin and tests
+        run: cmake --build build --config Release --parallel 4 --target FINISH_All FinishTests
+
+      - name: Run offline tests (Windows)
+        if: runner.os == 'Windows'
+        run: build/FinishTests_artefacts/Release/FinishTests.exe
+
+      - name: Run offline tests (macOS)
+        if: runner.os == 'macOS'
+        run: build/FinishTests_artefacts/Release/FinishTests
+
+      - name: Ad-hoc sign (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          codesign --force --deep --sign - build/FINISH_artefacts/Release/VST3/FINISH.vst3
+          codesign --force --deep --sign - build/FINISH_artefacts/Release/AU/FINISH.component
+
+      - name: Validate with pluginval (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          curl -sSL -o pluginval.zip https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_Windows.zip
+          7z x pluginval.zip -opluginval > /dev/null
+          ./pluginval/pluginval.exe --strictness-level 5 --skip-gui-tests --validate-in-process --validate "build/FINISH_artefacts/Release/VST3/FINISH.vst3"
+
+      - name: Validate with pluginval (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          curl -sSL -o pluginval.zip https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_macOS.zip
+          unzip -q pluginval.zip -d pluginval
+          ./pluginval/pluginval.app/Contents/MacOS/pluginval --strictness-level 5 --skip-gui-tests --validate-in-process --validate build/FINISH_artefacts/Release/VST3/FINISH.vst3
+
+      # ---------------- macOS installer (.pkg) ----------------
+      - name: Build macOS installer
+        if: runner.os == 'macOS'
+        run: |
+          set -e
+          mkdir -p pkg/vst3 pkg/au dist
+          cp -R build/FINISH_artefacts/Release/VST3/FINISH.vst3 pkg/vst3/
+          cp -R build/FINISH_artefacts/Release/AU/FINISH.component pkg/au/
+          for kind in vst3 au; do
+            pkgbuild --analyze --root pkg/$kind pkg/$kind.plist
+            plutil -replace 0.BundleIsRelocatable -bool NO pkg/$kind.plist
+          done
+          pkgbuild --root pkg/vst3 --component-plist pkg/vst3.plist --install-location "/Library/Audio/Plug-Ins/VST3" \
+                   --identifier com.finishaudio.finish.vst3 --version "$VERSION" pkg/FINISH-VST3.pkg
+          pkgbuild --root pkg/au --component-plist pkg/au.plist --install-location "/Library/Audio/Plug-Ins/Components" \
+                   --identifier com.finishaudio.finish.au --version "$VERSION" pkg/FINISH-AU.pkg
+          productbuild --package pkg/FINISH-VST3.pkg --package pkg/FINISH-AU.pkg "dist/FINISH-$VERSION-macOS.pkg"
+          mkdir zipdir
+          cp -R build/FINISH_artefacts/Release/VST3/FINISH.vst3 build/FINISH_artefacts/Release/AU/FINISH.component INSTALL_FR.txt zipdir/
+          (cd zipdir && zip -qry "../dist/FINISH-$VERSION-macOS-VST3-AU.zip" .)
+
+      # ---------------- Windows installer (.exe) ----------------
+      - name: Build Windows installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress | Out-Null }
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          & $iscc "/DAppVersion=$env:VERSION" "/O$PWD\dist" Installer\FINISH.iss
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          New-Item -ItemType Directory -Force -Path zipdir | Out-Null
+          Copy-Item -Recurse build/FINISH_artefacts/Release/VST3/FINISH.vst3 zipdir/
+          Copy-Item INSTALL_FR.txt zipdir/
+          Compress-Archive -Path zipdir/* -DestinationPath "dist/FINISH-$env:VERSION-Windows-VST3.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FINISH-${{ matrix.name }}
+          path: dist/*
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**/*
