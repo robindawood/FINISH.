@@ -22,18 +22,28 @@ jobs:
     runs-on: ${{ matrix.os }}
     defaults:
       run:
-        working-directory: src     # neutral folder name: Windows refuses folders ending with "."
+        # Sources live in a neutral folder: Windows refuses paths ending with "." (repository name "FINISH.").
+        working-directory: ${{ matrix.src }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - name: Windows
             os: windows-latest
+            src: 'C:/fsrc'
           - name: macOS
             os: macos-latest
+            src: src
 
     steps:
+      - name: Get sources (Windows)
+        if: runner.os == 'Windows'
+        working-directory: 'C:/'
+        shell: bash
+        run: git clone --depth 1 "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" /c/fsrc
+
       - uses: actions/checkout@v4
+        if: runner.os != 'Windows'
         with:
           path: src
 
@@ -111,7 +121,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: FINISH-${{ matrix.name }}
-          path: src/dist/*
+          path: ${{ matrix.src }}/dist/*
 
   # Also store the installers on the "installers" branch of the repository (easy to fetch with git).
   publish:
