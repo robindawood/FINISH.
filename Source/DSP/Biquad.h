@@ -27,9 +27,10 @@ struct Biquad
     void setHighPass (double sr, double f, double q)  { design (Type::highPass,  sr, f, q, 0.0); }
     void setLowShelf (double sr, double f, double db) { design (Type::lowShelf,  sr, f, 0.7071, db); }
     void setHighShelf (double sr, double f, double db){ design (Type::highShelf, sr, f, 0.7071, db); }
+    void setPeak (double sr, double f, double q, double db) { design (Type::peak, sr, f, q, db); }
 
 private:
-    enum class Type { lowPass, highPass, lowShelf, highShelf };
+    enum class Type { lowPass, highPass, lowShelf, highShelf, peak };
 
     void design (Type type, double sr, double f, double q, double gainDb) noexcept
     {
@@ -68,6 +69,10 @@ private:
                 na0 = (A + 1) - (A - 1) * cw + 2 * sA * alpha;
                 na1 = 2 * ((A - 1) - (A + 1) * cw);
                 na2 = (A + 1) - (A - 1) * cw - 2 * sA * alpha;
+                break;
+            case Type::peak:
+                nb0 = 1 + alpha * A; nb1 = -2 * cw; nb2 = 1 - alpha * A;
+                na0 = 1 + alpha / A; na1 = -2 * cw; na2 = 1 - alpha / A;
                 break;
         }
 

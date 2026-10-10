@@ -5,6 +5,38 @@ using namespace Night;
 MasterView::MasterView (FINISHAudioProcessor& p) : proc (p)
 {
     shortTerm.fill (-70.0f); momentary.fill (-70.0f); reduction.fill (0.0f);
+    reportButton.setButtonText (utf8 ("ANALYSE"));
+    reportButton.getProperties().set ("style", "chip");
+    reportButton.setClickingTogglesState (true);
+    reportButton.setTooltip (utf8 ("Ce que FINISH mesure dans ton mix, ce qu'il corrige et pourquoi, avant / après."));
+    reportButton.onClick = [this] { showReport (reportButton.getToggleState()); };
+    addAndMakeVisible (reportButton);
+    reportText.setMultiLine (true, true);
+    reportText.setReadOnly (true);
+    reportText.setCaretVisible (false);
+    reportText.setScrollbarsShown (true);
+    reportText.setFont (Night::mono (10.0f));
+    reportText.setColour (juce::TextEditor::backgroundColourId, juce::Colours::transparentBlack);
+    reportText.setColour (juce::TextEditor::outlineColourId, juce::Colours::transparentBlack);
+    reportText.setColour (juce::TextEditor::focusedOutlineColourId, juce::Colours::transparentBlack);
+    reportText.setColour (juce::TextEditor::textColourId, Night::mist);
+    addChildComponent (reportText);
+}
+
+void MasterView::resized()
+{
+    reportButton.setBounds (getWidth() - 96, 10, 80, 20);
+    reportText.setBounds (getLocalBounds().reduced (16, 12).withTrimmedTop (24));
+}
+
+void MasterView::showReport (bool on)
+{
+    reportMode = on;
+    reportButton.setToggleState (on, juce::dontSendNotification);
+    reportText.setVisible (on);
+    reportTicks = 0;
+    if (on) reportText.setText (proc.getMasterReport(), false);
+    repaint();
 }
 
 void MasterView::tick()
@@ -17,6 +49,12 @@ void MasterView::tick()
     const float tp = d.getTruePeakDb();
     if (tp > tpHold || --tpHoldTicks <= 0) { tpHold = tp; tpHoldTicks = 60; }
     grHold = std::max (d.getGainReductionDb(), grHold * 0.9f);
+    if (reportMode && ++reportTicks >= 60)
+    {
+        reportTicks = 0;
+        const auto t = proc.getMasterReport();
+        if (t != reportText.getText()) { const auto pos = reportText.getCaretPosition(); reportText.setText (t, false); reportText.setCaretPosition (pos); }
+    }
     repaint();
 }
 
@@ -25,18 +63,27 @@ void MasterView::paint (juce::Graphics& g)
     auto r = getLocalBounds().toFloat();
     drawScreen (g, r.reduced (2.0f), 14.0f);
     auto inner = r.reduced (18.0f, 14.0f);
+    if (reportMode)
+    {
+        g.setFont (mono (9.5f));
+        g.setColour (cyan.withAlpha (0.9f));
+        g.drawText (utf8 ("MASTER  ·  ANALYSE ET COMPTE RENDU"), inner.withHeight (14.0f), juce::Justification::centredLeft);
+        drawScreenGlass (g, r.reduced (2.0f), 14.0f, 0.2f);
+        return;
+    }
 
     const int t = proc.getTargetIndex();
-    const float target = t > 0 ? loudnessTargets[t].lufs : -14.0f;
+    const float target = t > 0 ? proc.getTargetLufs() : -14.0f;
 
     // Header
     g.setFont (mono (9.5f));
     g.setColour (cyan.withAlpha (0.9f));
     g.drawText ("MASTER", inner.withHeight (14.0f), juce::Justification::centredLeft);
     g.setColour (dusk);
-    g.drawText (t > 0 ? juce::String ("TARGET ") + loudnessTargets[t].name + " LUFS" : juce::String ("MANUAL (LOUDNESS KNOB)"),
+    g.drawText (t == sameLevelTarget ? utf8 ("MÊME NIVEAU ") + juce::String (target, 1) + " LUFS"
+                : (t > 0 ? juce::String ("TARGET ") + loudnessTargets[t].name + " LUFS" : juce::String ("MANUAL (LOUDNESS KNOB)")),
                 inner.withHeight (14.0f).withTrimmedLeft (70.0f), juce::Justification::centredLeft);
-    g.drawText ("20 S", inner.withHeight (14.0f).withTrimmedRight (250.0f), juce::Justification::centredRight);
+    g.drawText ("20 S", inner.withHeight (14.0f).withTrimmedRight (340.0f), juce::Justification::centredRight);
 
     // Graph
     auto graph = inner.withTrimmedTop (22.0f).withTrimmedRight (250.0f).withTrimmedBottom (4.0f);
@@ -129,7 +176,7 @@ MasterColumn::MasterColumn (FINISHAudioProcessor& p) : proc (p)
     for (int t = 0; t < numLoudnessTargets; ++t)
     {
         auto& b = targets[(size_t) t];
-        b.setButtonText (t == 0 ? juce::String ("MANUAL") : juce::String (loudnessTargets[t].shortName) + " " + juce::String ((int) loudnessTargets[t].lufs));
+        b.setButtonText (t == 0 ? juce::String ("MANUAL") : (t == sameLevelTarget ? utf8 ("MÊME NIV.") : juce::String (loudnessTargets[t].shortName) + " " + juce::String ((int) loudnessTargets[t].lufs)));
         b.onClick = [this, t]
         {
             if (auto* prm = proc.params.getParameter (ParamIDs::target))
@@ -146,35 +193,69 @@ MasterColumn::MasterColumn (FINISHAudioProcessor& p) : proc (p)
     targets[2].setTooltip (utf8 ("Équilibré : -11 LUFS, fort mais encore vivant."));
     targets[3].setTooltip (utf8 ("Club : -9 LUFS, pour les DJ sets."));
     targets[4].setTooltip (utf8 ("Très fort : -7 LUFS, au prix de la dynamique."));
-    targets[0].setTooltip (utf8 ("Manuel : le bouton LOUDNESS règle le gain dans le limiteur."));
-    ceiling.getProperties().set ("lunar", true);
+    targets[0].setTooltip (utf8 ("Manuel : corrections coupées, le bouton LOUDNESS règle le gain dans le limiteur."));
+    targets[sameLevelTarget].setTooltip (utf8 ("Même niveau : FINISH corrige le son sans monter le volume (recommandé quand ton mix est déjà fort)."));
+    for (int i = 0; i < numMasterProfiles; ++i)
+    {
+        auto& b = profiles[(size_t) i];
+        b.setButtonText (MasterDoctor::profileLabel ((MasterDoctor::Profile) i));
+        b.getProperties().set ("style", "chip");
+        b.setTooltip (MasterDoctor::profileHelp ((MasterDoctor::Profile) i));
+        b.onClick = [this, i]
+        {
+            if (auto* prm = proc.params.getParameter (ParamIDs::masterProfile))
+            {
+                prm->beginChangeGesture();
+                prm->setValueNotifyingHost (prm->convertTo0to1 ((float) i));
+                prm->endChangeGesture();
+            }
+            proc.setMasterCharacter (i == (int) MasterDoctor::Profile::Warm ? proc.getKeepDark() : false, false);
+            refresh();
+        };
+        addAndMakeVisible (b);
+    }
+    for (auto* k : { &ceiling, &intensity })
+    {
+        k->getProperties().set ("lunar", true);
+        k->setTextBoxStyle (juce::Slider::TextBoxBelow, false, 70, 14);
+        addAndMakeVisible (k);
+    }
     ceiling.setTooltip (utf8 ("Plafond true-peak : -1 dBTP pour le streaming, -0.3 pour le club."));
+    intensity.setTooltip (utf8 ("Intensité des corrections (EQ, largeur, leveller, clipper)."));
     ceilingAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (proc.params, ParamIDs::ceiling, ceiling);
+    intensityAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (proc.params, ParamIDs::masterIntensity, intensity);
     ceiling.setNumDecimalPlacesToDisplay (1);
-    addAndMakeVisible (ceiling);
 }
 
 void MasterColumn::resized()
 {
     const int w = getWidth();
-    targets[0].setBounds (8, 146, w - 16, 28);
-    for (int t = 1; t < numLoudnessTargets; ++t)
-        targets[(size_t) t].setBounds (8 + ((t - 1) % 2) * ((w - 16) / 2), 180 + ((t - 1) / 2) * 34, (w - 16) / 2 - 4, 30);
-    ceiling.setBounds (w / 2 - 50, 254, 100, 88);
+    const int half = (w - 16) / 2;
+    const int order[] = { 0, sameLevelTarget, 1, 2, 3, 4 };
+    for (int k = 0; k < numLoudnessTargets; ++k)
+        targets[(size_t) order[k]].setBounds (8 + (k % 2) * half, 140 + (k / 2) * 30, half - 4, 26);
+    const int pw = (w - 16) / numMasterProfiles;
+    for (int i = 0; i < numMasterProfiles; ++i) profiles[(size_t) i].setBounds (8 + i * pw, 246, pw - 4, 22);
+    intensity.setBounds (w / 4 - 36, 280, 72, 64);
+    ceiling.setBounds (3 * w / 4 - 36, 280, 72, 64);
 }
 
 void MasterColumn::refresh()
 {
     const int t = proc.getTargetIndex();
     for (int k = 0; k < numLoudnessTargets; ++k) targets[(size_t) k].setToggleState (k == t, juce::dontSendNotification);
+    const int pr = (int) proc.params.getRawParameterValue (ParamIDs::masterProfile)->load();
+    for (int i = 0; i < numMasterProfiles; ++i) profiles[(size_t) i].setToggleState (i == pr, juce::dontSendNotification);
     repaint();
 }
 
 void MasterColumn::paint (juce::Graphics& g)
 {
     const auto w = (float) getWidth();
-    engraved (g, "LOUDNESS TARGET", { 0.0f, 128.0f, w, 10.0f }, 6.5f);
-    engraved (g, "CEILING", { 0.0f, 246.0f, w, 10.0f }, 6.5f);
+    engraved (g, "LOUDNESS TARGET", { 0.0f, 126.0f, w, 10.0f }, 6.5f);
+    engraved (g, "PROFIL", { 0.0f, 234.0f, w, 10.0f }, 6.5f);
+    engraved (g, utf8 ("INTENSITÉ"), { 0.0f, 272.0f, w / 2.0f, 10.0f }, 6.5f);
+    engraved (g, "CEILING", { w / 2.0f, 272.0f, w / 2.0f, 10.0f }, 6.5f);
 }
 
 // ======================================================================================
@@ -187,28 +268,31 @@ void MasterConsole::paint (juce::Graphics& g)
     const bool on = t > 0;
     auto r = getLocalBounds().toFloat().reduced (2.0f, 10.0f);
     struct Module { juce::String name, value, sub; float meter; bool active; };
-    const float eqL = proc.getAutoEqLow(), eqH = proc.getAutoEqHigh();
     auto sgn = [] (float v) { return (v >= 0 ? "+" : "") + juce::String (v, 1); };
+    const float eqL = proc.getAutoEqLow(), eqH = proc.getAutoEqHigh(), mud = proc.getAutoMud(), pres = proc.getAutoPres();
+    const float side = proc.getAutoSide(), monoAmt = proc.getAutoMono();
     const Module mods[] = {
-        { "BALANCE", on ? sgn (eqL) + " / " + sgn (eqH) : "OFF", "LOW 110 / HIGH 9k dB", std::min (1.0f, (std::abs (eqL) + std::abs (eqH)) / 4.0f), on },
-        { "LEVELLER", on ? juce::String (d.getBandGrDb (0), 1) + "  " + juce::String (d.getBandGrDb (1), 1) + "  " + juce::String (d.getBandGrDb (2), 1) : "OFF",
-          "LOW  MID  HIGH  dB", std::min (1.0f, (d.getBandGrDb (0) + d.getBandGrDb (1) + d.getBandGrDb (2)) / 6.0f), on },
+        { "TONE", on ? sgn (eqL) + " " + sgn (mud) + " " + sgn (pres) + " " + sgn (eqH) : "OFF", "110  300  3.2k  9k dB",
+          std::min (1.0f, (std::abs (eqL) + std::abs (eqH) + std::abs (mud) + std::abs (pres)) / 6.0f), on },
+        { "WIDTH", on ? sgn (side) + (monoAmt > 0.5f ? " M" : "") : "OFF", monoAmt > 0.5f ? "SIDES dB  MONO <160" : "SIDES dB", std::min (1.0f, std::abs (side) / 3.0f), on },
+        { "LEVELLER", on ? juce::String (d.getBandGrDb (0), 1) + " " + juce::String (d.getBandGrDb (1), 1) + " " + juce::String (d.getBandGrDb (2), 1) : "OFF",
+          proc.getAutoPunchKeep() > 0.5f ? "L M H dB  PUNCH" : "LOW MID HIGH dB", std::min (1.0f, (d.getBandGrDb (0) + d.getBandGrDb (1) + d.getBandGrDb (2)) / 6.0f), on },
         { "DRIVE", juce::String (on ? proc.getAutoDriveDb() + d.getLoudnessCorrectionDb() : 0.0f, 1), on ? "AUTO TO TARGET dB" : "LOUDNESS KNOB", 0.5f, true },
-        { "CLIPPER", on ? juce::String (d.getClipDb(), 1) : "OFF", "SHAVED dB", std::min (1.0f, d.getClipDb() / 2.0f), on && t > 1 },
-        { "LIMITER", juce::String (-d.getGainReductionDb(), 1), "TRUE PEAK  LOOK-AHEAD", std::min (1.0f, d.getGainReductionDb() / 8.0f), true },
-        { "OUT", juce::String (d.getOutputLoudness(), 1), "LUFS SHORT-TERM", 0.0f, true },
+        { "CLIPPER", on ? juce::String (d.getClipDb(), 1) : "OFF", "SHAVED dB", std::min (1.0f, d.getClipDb() / 2.0f), on },
+        { "LIMITER", juce::String (-d.getGainReductionDb(), 1), "TRUE PEAK", std::min (1.0f, d.getGainReductionDb() / 8.0f), true },
+        { "OUT", juce::String (d.getOutputLoudness(), 1), "LUFS SHORT", 0.0f, true },
     };
     const int n = (int) (sizeof (mods) / sizeof (mods[0]));
-    const float mw = (r.getWidth() - (n - 1) * 14.0f) / (float) n;
+    const float mw = (r.getWidth() - (n - 1) * 12.0f) / (float) n;
     for (int i = 0; i < n; ++i)
     {
-        auto box = juce::Rectangle<float> (r.getX() + (float) i * (mw + 14.0f), r.getY() + 12.0f, mw, r.getHeight() - 12.0f);
+        auto box = juce::Rectangle<float> (r.getX() + (float) i * (mw + 12.0f), r.getY() + 12.0f, mw, r.getHeight() - 12.0f);
         drawScreen (g, box, 8.0f, true);
         drawLed (g, { box.getX() + 12.0f, box.getY() + 14.0f }, 3.0f, mods[i].active ? mint : dusk, mods[i].active);
         g.setFont (label (8.0f));
         g.setColour (mods[i].active ? moon : dusk);
         g.drawText (mods[i].name, box.reduced (22.0f, 6.0f).withHeight (16.0f), juce::Justification::centredLeft);
-        g.setFont (mono (mods[i].value.length() > 8 ? 12.0f : 20.0f));
+        g.setFont (mono (mods[i].value.length() > 14 ? 9.5f : (mods[i].value.length() > 8 ? 12.0f : 20.0f)));
         g.setColour (mods[i].active ? cyan : dusk);
         g.drawText (mods[i].value, box.reduced (12.0f, 0).withTrimmedTop (30.0f).withHeight (36.0f), juce::Justification::centredLeft);
         g.setFont (mono (7.5f));

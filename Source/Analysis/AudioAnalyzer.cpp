@@ -12,6 +12,9 @@ void AudioAnalyzer::prepare (double sampleRate)
     kw.prepare (sr);
     for (auto* b : { &lowLp, &lowLp2, &sideLowLp, &sideLowLp2 })   b->setLowPass (sr, 150.0, 0.7071);
     for (auto* b : { &highHp, &highHp2, &sideHighHp, &sideHighHp2 }) b->setHighPass (sr, 4000.0, 0.7071);
+    subLp.setLowPass (sr, 60.0, 0.7071); subLp2.setLowPass (sr, 60.0, 0.7071);
+    lmHp.setHighPass (sr, 200.0, 0.7071); lmLp.setLowPass (sr, 500.0, 0.7071);
+    prHp.setHighPass (sr, 2000.0, 0.7071); prLp.setLowPass (sr, 5000.0, 0.7071);
     fastAtt = envCoeff (sr, 0.0005); fastRel = envCoeff (sr, 0.030);
     slowAtt = envCoeff (sr, 0.020);  slowRel = envCoeff (sr, 0.150);
     reset();
@@ -20,10 +23,12 @@ void AudioAnalyzer::prepare (double sampleRate)
 void AudioAnalyzer::reset()
 {
     kw.reset();
-    for (auto* b : { &lowLp, &lowLp2, &highHp, &highHp2, &sideLowLp, &sideLowLp2, &sideHighHp, &sideHighHp2 }) b->reset();
+    for (auto* b : { &lowLp, &lowLp2, &highHp, &highHp2, &sideLowLp, &sideLowLp2, &sideHighHp, &sideHighHp2, &subLp, &subLp2, &lmHp, &lmLp, &prHp, &prLp }) b->reset();
+    accSub = accLowMid = accPres = 0; accClips = 0;
     fastEnv = slowEnv = 0;
     accK = accMid = accSide = accLow = accHigh = accLowSide = accHighSide = accL = accR = accLR = 0;
     accPeak = accOnset = 0;
+    accSub = accLowMid = accPres = 0; accClips = 0;
     frameCount = 0;
 }
 
@@ -59,6 +64,15 @@ void AudioAnalyzer::process (const float* L, const float* R, int n, double block
         accR += (double) (r * r);
         accLR += (double) (l * r);
         accPeak = std::max (accPeak, std::max (std::abs (l), std::abs (r)));
+        {
+            const float sb = subLp2.process (subLp.process (mid, 0), 0);
+            const float lm = lmLp.process (lmHp.process (mid, 0), 0);
+            const float pr = prLp.process (prHp.process (mid, 0), 0);
+            accSub += (double) (sb * sb);
+            accLowMid += (double) (lm * lm);
+            accPres += (double) (pr * pr);
+            if (std::abs (l) >= 0.9995f || std::abs (r) >= 0.9995f) ++accClips;
+        }
 
         const float det = std::abs (mid);
         fastEnv = det > fastEnv ? fastAtt * fastEnv + (1 - fastAtt) * det : fastRel * fastEnv + (1 - fastRel) * det;
@@ -98,6 +112,10 @@ void AudioAnalyzer::finishFrame() noexcept
     f.rPow = (float) (accR * inv);
     f.lrCross = (float) (accLR * inv);
     f.onsetDb = accOnset;
+    f.subPow = (float) (accSub * inv);
+    f.lowMidPow = (float) (accLowMid * inv);
+    f.presPow = (float) (accPres * inv);
+    f.clips = (float) accClips;
 
     if (frameFifo.getFreeSpace() > 0)
     {
@@ -110,6 +128,7 @@ void AudioAnalyzer::finishFrame() noexcept
 
     accK = accMid = accSide = accLow = accHigh = accLowSide = accHighSide = accL = accR = accLR = 0;
     accPeak = accOnset = 0;
+    accSub = accLowMid = accPres = 0; accClips = 0;
     frameCount = 0;
 }
 

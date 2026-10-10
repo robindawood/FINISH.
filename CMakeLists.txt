@@ -4,7 +4,7 @@ cmake_minimum_required(VERSION 3.22)
 set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64" CACHE STRING "macOS architectures")
 set(CMAKE_OSX_DEPLOYMENT_TARGET "10.13" CACHE STRING "Minimum macOS version")
 
-project(FINISH VERSION 2.0.0 LANGUAGES C CXX)
+project(FINISH VERSION 3.0.0 LANGUAGES C CXX)
 
 # Source files contain UTF-8 text (French UI strings).
 if(MSVC)
@@ -93,7 +93,15 @@ set(FINISH_SOURCES
     Source/Compose/PreviewSynth.cpp
     Source/Compose/ArrangementExport.cpp
     Source/Compose/ComposeCommand.cpp
-    Source/Compose/Composer.cpp)
+    Source/Compose/Composer.cpp
+    Source/Project/LiveProject.cpp
+    Source/Project/ProjectAnalyzer.cpp
+    Source/Project/ProjectPlanner.cpp
+    Source/Project/ProjectCommand.cpp
+    Source/Project/ProjectSession.cpp
+    Source/Project/LiveBridge.cpp
+    Source/Master/MasterDoctor.cpp
+    Source/UI/ProjectViews.cpp)
 
 target_sources(FINISH PRIVATE ${FINISH_SOURCES})
 target_compile_features(FINISH PRIVATE cxx_std_17)
@@ -120,10 +128,10 @@ target_link_libraries(FINISH
 if(FINISH_BUILD_TESTS)
     juce_add_console_app(FinishTests PRODUCT_NAME "FinishTests")
     juce_generate_juce_header(FinishTests)
-    target_sources(FinishTests PRIVATE ${FINISH_SOURCES} Tests/TestMain.cpp Tests/ComposeTests.cpp)
+    target_sources(FinishTests PRIVATE ${FINISH_SOURCES} Tests/TestMain.cpp Tests/ComposeTests.cpp Tests/ProjectTests.cpp)
     target_include_directories(FinishTests PRIVATE Source)
     target_compile_features(FinishTests PRIVATE cxx_std_17)
-    target_compile_definitions(FinishTests PRIVATE ${FINISH_DEFINITIONS} JucePlugin_Name="FINISH" JUCE_STANDALONE_APPLICATION=1 JUCE_MODAL_LOOPS_PERMITTED=1)
+    target_compile_definitions(FinishTests PRIVATE ${FINISH_DEFINITIONS} JucePlugin_Name="FINISH" JUCE_STANDALONE_APPLICATION=1 JUCE_MODAL_LOOPS_PERMITTED=1 FINISH_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
     target_link_libraries(FinishTests PRIVATE
         FinishAssets juce::juce_audio_utils juce::juce_dsp
         juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)

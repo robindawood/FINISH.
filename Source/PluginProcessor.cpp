@@ -18,6 +18,9 @@ FINISHAudioProcessor::FINISHAudioProcessor()
     pCoherence = params.getRawParameterValue (ParamIDs::coherence);
     pTarget = params.getRawParameterValue (ParamIDs::target);
     pCeiling = params.getRawParameterValue (ParamIDs::ceiling);
+    pProfile = params.getRawParameterValue (ParamIDs::masterProfile);
+    pIntensity = params.getRawParameterValue (ParamIDs::masterIntensity);
+    outAnalyzer.setPublishSamples (false);
 
     sampleRing.assign ((size_t) fftSize, 0.0f);
     fftData.assign ((size_t) fftSize * 2, 0.0f);
@@ -46,6 +49,7 @@ void FINISHAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock
 {
     currentSampleRate = sampleRate;
     analyzer.prepare (sampleRate);
+    outAnalyzer.prepare (sampleRate);
     dsp.prepare (sampleRate, samplesPerBlock, juce::jmax (1, getTotalNumOutputChannels()));
     layerSmoothed = {};
     keepSmoothed = 0;
@@ -97,6 +101,7 @@ void FINISHAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
 
     // Preview of generated parts: replaces (solo) or joins the input, then goes through the master chain.
     const bool previewing = preview.isPlaying();
+    previewingNow.store (previewing);
     if (previewing && previewSolo.load()) buffer.clear();
     preview.render (buffer.getWritePointer (0), buffer.getNumChannels() > 1 ? buffer.getWritePointer (1) : nullptr, n, previewBpm.load());
 
@@ -140,16 +145,24 @@ void FINISHAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
     // Mastering drive: from the loudness target when one is chosen, else the manual LOUDNESS knob.
     const int targetIdx = getTargetIndex();
     s.driveDb = targetIdx > 0 ? autoDriveDb.load() : s.macros.loudness * s.macros.amount * 10.0f;
-    s.autoLoudness = targetIdx > 0;
-    s.targetLufs = loudnessTargets[targetIdx].lufs;
-    // Mastering stage: leveller, clipper and tonal balance scale with how loud the target is.
-    static constexpr float glueFor[] = { 0.0f, 0.45f, 0.6f, 0.7f, 0.8f };
-    static constexpr float clipFor[] = { 0.0f, 0.15f, 0.4f, 0.65f, 0.85f };
-    s.glue = glueFor[targetIdx];
-    s.clip = clipFor[targetIdx];
-    s.eqLowDb = targetIdx > 0 ? autoEqLow.load() : 0.0f;
-    s.eqHighDb = targetIdx > 0 ? autoEqHigh.load() : 0.0f;
+    s.targetLufs = getTargetLufs();
+    s.autoLoudness = targetIdx > 0 && s.targetLufs > -60.0f;
+    // Mastering stage: corrections from the mix analysis (MasterDoctor), only when a target is chosen.
+    const bool mastering = targetIdx > 0;
+    s.glue = mastering ? autoGlue.load() : 0.0f;
+    s.clip = mastering ? autoClip.load() : 0.0f;
+    s.eqLowDb = mastering ? autoEqLow.load() : 0.0f;
+    s.eqHighDb = mastering ? autoEqHigh.load() : 0.0f;
+    s.eqMudDb = mastering ? autoMud.load() : 0.0f;
+    s.eqPresDb = mastering ? autoPres.load() : 0.0f;
+    s.sideDb = mastering ? autoSide.load() : 0.0f;
+    s.monoBass = mastering ? autoMono.load() : 0.0f;
+    s.punchKeep = mastering ? autoPunch.load() : 0.0f;
     dsp.process (buffer, s);
+    // What leaves FINISH, measured like what came in (not during a preview: that is not the song).
+    if (! previewing)
+        outAnalyzer.process (buffer.getReadPointer (0), buffer.getNumChannels() > 1 ? buffer.getReadPointer (1) : nullptr,
+                             n, playing && timeValid ? songTime : -1.0);
 }
 
 SectionMacros FINISHAudioProcessor::getLiveSectionLayer() const noexcept
@@ -160,6 +173,13 @@ SectionMacros FINISHAudioProcessor::getLiveSectionLayer() const noexcept
 int FINISHAudioProcessor::getTargetIndex() const noexcept
 {
     return juce::jlimit (0, numLoudnessTargets - 1, (int) pTarget->load());
+}
+
+float FINISHAudioProcessor::getTargetLufs() const noexcept
+{
+    const int t = getTargetIndex();
+    if (t == sameLevelTarget) return sameLevelLufs.load();
+    return loudnessTargets[t].lufs;
 }
 
 float FINISHAudioProcessor::getSongLoudness() const noexcept
@@ -188,7 +208,7 @@ void FINISHAudioProcessor::updateAutoDrive()
     if (hostPlaying.load() && in > -50.0f)
         liveSongLufs = liveSongLufs < -60.0f ? in : liveSongLufs + (in - liveSongLufs) / 600.0f;
     const int t = getTargetIndex();
-    autoDriveDb.store (t > 0 ? computeDriveFor (loudnessTargets[t].lufs) : 0.0f);
+    autoDriveDb.store (t > 0 && getTargetLufs() > -60.0f ? computeDriveFor (getTargetLufs()) : 0.0f);
 }
 
 juce::AudioProcessorParameter* FINISHAudioProcessor::getBypassParameter() const
@@ -210,6 +230,11 @@ void FINISHAudioProcessor::timerCallback()
         {
             const auto& f = frameScratch[(size_t) i];
             if (analysisState == AnalysisState::Listening) session.add (f);
+            if (f.hostTime >= 0.0 && hostPlaying.load() && ! previewingNow.load())
+            {
+                masterInFrames.push_back (f);
+                while (masterInFrames.size() > 600) masterInFrames.pop_front();
+            }
             // Always remember the last stretch played: FINISH MY TRACK can use it at once.
             if (f.hostTime >= 0.0)
             {
@@ -219,6 +244,49 @@ void FINISHAudioProcessor::timerCallback()
                 recentLastTime = f.hostTime + f.seconds;
             }
         }
+    }
+
+    for (;;)
+    {
+        const int got = outAnalyzer.readFrames (frameScratch.data(), (int) frameScratch.size());
+        if (got == 0) break;
+        for (int i = 0; i < got; ++i)
+        {
+            const auto& f = frameScratch[(size_t) i];
+            if (f.hostTime >= 0.0 && hostPlaying.load() && ! previewingNow.load())
+            {
+                masterOutFrames.push_back (f);
+                while (masterOutFrames.size() > 600) masterOutFrames.pop_front();
+            }
+        }
+    }
+    {
+        const float pk = dsp.takeMaxPeakDb();
+        if (hostPlaying.load() && ! previewingNow.load()) tpHistory.push_back (pk);
+        while (tpHistory.size() > 1800) tpHistory.pop_front();
+    }
+    updateMaster (false);
+
+    // The user's Live project
+    if (project.tick())
+    {
+        if (project.takeFreshPlan())
+        {
+            // Fresh read: show what FINISH understood and what it plans (or answer the request that triggered the read).
+            if (pendingProjectCommand.isNotEmpty())
+            {
+                const auto cmd = pendingProjectCommand;
+                pendingProjectCommand.clear();
+                handleProjectCommand (cmd);
+            }
+            else
+                setAnswer (ProjectAnalyzer::report (project.getAnalysis(), project.getProject()) + "\n" + project.planText());
+            if (project.getOptions().level == Level::Finalise || (int) pTarget->load() == 0) applyRecommendedTarget();
+            pageRequest = 0;
+        }
+        if (project.takeLiveResult()) setAnswer (project.getLastReport());
+        statusMessage = project.getStatus();
+        ++resultVersion;
     }
 
     if (analysisState == AnalysisState::Listening)
@@ -365,14 +433,8 @@ void FINISHAudioProcessor::finishAnalysisFrom (const AnalysisSession& source)
     if (! composeAfterwards) return;
     composeAfterwards = false;
 
-    // 1. Mastering on: a loudness target when the user had none.
-    if ((int) pTarget->load() == 0)
-        if (auto* t = params.getParameter (ParamIDs::target))
-        {
-            t->beginChangeGesture();
-            t->setValueNotifyingHost (t->convertTo0to1 (2.0f));   // BALANCED -11 LUFS
-            t->endChangeGesture();
-        }
+    // 1. Mastering on when the user had none: the target the mix analysis recommends (never louder by default).
+    if ((int) pTarget->load() == 0) applyRecommendedTarget();
 
     // 2. Section moves FINISH is confident about (only on a real song with several parts).
     if (m.sections.size() >= 3)
@@ -434,6 +496,257 @@ void FINISHAudioProcessor::afterCompose()
     ++resultVersion;
 }
 
+// ======================================================================================
+// FINISH 3: the user's Live project
+
+void FINISHAudioProcessor::readLiveProject()
+{
+    juce::String err;
+    if (project.readProject (err)) statusMessage = project.getStatus();
+    else
+    {
+        const auto& d = project.getDiagnosis();
+        statusMessage = err;
+        juce::String a = utf8 ("CONNEXION À LIVE : ") + d.title + "\n\n";
+        for (int i = 0; i < d.steps.size(); ++i) a << juce::String (i + 1) << ". " << d.steps[i] << "\n";
+        a << "\n" << LiveBridge::linkVersusControlSurface();
+        a << utf8 ("\n\nSans Live (FL Studio...) : onglet ESQUISSE, FINISH écoute ton morceau et propose des parties en MIDI.");
+        setAnswer (a);
+    }
+    pageRequest = 0;
+    ++resultVersion;
+}
+
+void FINISHAudioProcessor::showProject (LiveProject p)
+{
+    project.loadProject (std::move (p));
+    project.takeFreshPlan();
+    setAnswer (ProjectAnalyzer::report (project.getAnalysis(), project.getProject()) + "\n" + project.planText());
+    statusMessage = project.getStatus();
+    pageRequest = 0;
+    ++resultVersion;
+}
+
+void FINISHAudioProcessor::editProject (const std::function<void (ProjectSession&)>& change)
+{
+    change (project);
+    statusMessage = project.getStatus();
+    ++resultVersion;
+}
+
+void FINISHAudioProcessor::sendProjectToLive()
+{
+    stopPreview();
+    juce::String err;
+    if (project.send (currentSampleRate.load(), err)) statusMessage = project.getStatus();
+    else statusMessage = err;
+    ++resultVersion;
+}
+
+void FINISHAudioProcessor::undoProjectSend()
+{
+    juce::String err;
+    if (project.undoSend (err)) statusMessage = project.getStatus();
+    else statusMessage = err;
+    ++resultVersion;
+}
+
+void FINISHAudioProcessor::previewProject (int section, bool loop)
+{
+    if (! project.hasPlan()) return;
+    previewSource = 1;
+    projectPreviewVersion = -1;
+    refreshPreviewSequence();
+    const auto arr = project.previewArrangement();
+    if (arr.sections.empty()) return;
+    // Plan section index -> preview section index (the preview holds the new sections only)
+    int idx = -1, k = 0;
+    const auto& plan = project.getPlan();
+    for (int i = 0; i < (int) plan.sections.size(); ++i)
+    {
+        if (plan.sections[(size_t) i].existing) continue;
+        if (i == section) idx = k;
+        ++k;
+    }
+    if (idx < 0)
+    {
+        previewSectionIndex = -1;
+        preview.play (0.0, 0.0, loop ? arr.totalBars() * 4.0 : 0.0);
+    }
+    else
+    {
+        const auto& s = arr.sections[(size_t) idx];
+        previewSectionIndex = section;
+        const double a = s.startBar * 4.0, b = a + s.lengthBeats();
+        preview.play (a, loop ? a : 0.0, loop ? b : 0.0);
+    }
+    ++resultVersion;
+}
+
+// ======================================================================================
+// Mastering from the mix analysis
+
+double FINISHAudioProcessor::getMasterSeconds() const noexcept
+{
+    double d = 0;
+    for (auto& f : masterInFrames) d += f.seconds;
+    return d;
+}
+
+void FINISHAudioProcessor::updateMaster (bool force)
+{
+    const double now = juce::Time::getMillisecondCounterHiRes() / 1000.0;
+    const int profile = juce::jlimit (0, numMasterProfiles - 1, (int) pProfile->load());
+    const float intensity = pIntensity->load();
+    const int target = getTargetIndex();
+    const bool settingsChanged = profile != lastProfile || std::abs (intensity - lastIntensity) > 0.005f || target != lastTargetForPlan;
+    if (! force && ! settingsChanged && now - lastMasterUpdate < 2.0) return;
+    if (! force && ! settingsChanged && ! hostPlaying.load()) return;
+    lastMasterUpdate = now;
+    lastProfile = profile; lastIntensity = intensity; lastTargetForPlan = target;
+
+    if (getMasterSeconds() >= 8.0)
+    {
+        masterInFeatures = AnalysisSession::computeFeatures (std::vector<AnalysisFrame> (masterInFrames.begin(), masterInFrames.end()));
+        masterOutFeatures = AnalysisSession::computeFeatures (std::vector<AnalysisFrame> (masterOutFrames.begin(), masterOutFrames.end()));
+        if (masterInFeatures.valid) sameLevelLufs.store (masterInFeatures.integratedLufs);
+        masterOutTpMax = -100.0f;
+        for (auto v : tpHistory) masterOutTpMax = std::max (masterOutTpMax, v);
+    }
+    MasterDoctor::Request r;
+    r.in = masterInFeatures.valid ? masterInFeatures : features;
+    if (! r.in.valid) return;
+    if (! masterInFeatures.valid) sameLevelLufs.store (features.integratedLufs);
+    r.reference = reference.valid ? &reference.features : nullptr;
+    r.profile = (MasterDoctor::Profile) profile;
+    r.intensity = intensity;
+    r.keepDark = keepDark;
+    r.keepBright = keepBright;
+    r.targetIndex = target;
+    r.bpm = hostBpm.load();
+    const auto plan = MasterDoctor::design (r);
+    // Move only for real changes (the analysis window slides while playing).
+    auto moved = [] (float a, float b, float tol) { return std::abs (a - b) > tol; };
+    const bool changed = ! masterPlan.valid || settingsChanged || force
+        || moved (plan.eqLowDb, masterPlan.eqLowDb, 0.3f) || moved (plan.eqHighDb, masterPlan.eqHighDb, 0.3f)
+        || moved (plan.eqMudDb, masterPlan.eqMudDb, 0.3f) || moved (plan.eqPresDb, masterPlan.eqPresDb, 0.3f)
+        || moved (plan.sideDb, masterPlan.sideDb, 0.3f) || moved (plan.monoBass, masterPlan.monoBass, 0.5f)
+        || moved (plan.glue, masterPlan.glue, 0.08f) || moved (plan.clip, masterPlan.clip, 0.08f) || moved (plan.punchKeep, masterPlan.punchKeep, 0.5f)
+        || plan.findings.size() != masterPlan.findings.size();
+    if (! changed) return;
+    masterPlan = plan;
+    autoEqLow.store (plan.eqLowDb);
+    autoEqHigh.store (plan.eqHighDb);
+    autoMud.store (plan.eqMudDb);
+    autoPres.store (plan.eqPresDb);
+    autoSide.store (plan.sideDb);
+    autoMono.store (plan.monoBass);
+    autoGlue.store (plan.glue);
+    autoClip.store (plan.clip);
+    autoPunch.store (plan.punchKeep);
+    ++resultVersion;
+}
+
+juce::String FINISHAudioProcessor::getMasterReport() const
+{
+    const auto& in = masterInFeatures.valid ? masterInFeatures : features;
+    const bool outOk = masterInFeatures.valid && masterOutFeatures.valid && getTargetIndex() > 0;
+    return MasterDoctor::report (masterPlan, in, outOk ? &masterOutFeatures : nullptr, outOk ? masterOutTpMax : -100.0f,
+                                 getTargetIndex(), getTargetLufs(), pIntensity->load(), (MasterDoctor::Profile) juce::jlimit (0, 3, (int) pProfile->load()));
+}
+
+void FINISHAudioProcessor::setMasterCharacter (bool dark, bool bright)
+{
+    keepDark = dark;
+    keepBright = bright && ! dark;
+    if (dark)
+        if (auto* p = params.getParameter (ParamIDs::masterProfile))
+        {
+            p->beginChangeGesture();
+            p->setValueNotifyingHost (p->convertTo0to1 ((float) MasterDoctor::Profile::Warm));
+            p->endChangeGesture();
+        }
+    updateMaster (true);
+}
+
+void FINISHAudioProcessor::applyRecommendedTarget()
+{
+    updateMaster (true);
+    const int t = masterPlan.valid ? masterPlan.recommendedTarget : sameLevelTarget;
+    if (auto* prm = params.getParameter (ParamIDs::target))
+    {
+        prm->beginChangeGesture();
+        prm->setValueNotifyingHost (prm->convertTo0to1 ((float) t));
+        prm->endChangeGesture();
+    }
+    lastTargetForPlan = -1;
+    updateMaster (true);
+    project.log (ProjectSession::Entry::Kind::Master, utf8 ("Mastering : cible ") + juce::String (loudnessTargets[t].name)
+                 + (masterPlan.valid ? juce::String (". ") + masterPlan.targetWhy : juce::String()));
+}
+
+bool FINISHAudioProcessor::handleProjectCommand (const juce::String& text)
+{
+    const auto cmd = ProjectCommand::parse (text);
+    if (cmd.isEmpty()) return false;
+    using K = ProjectCommand::Kind;
+    intentUnderstood = cmd.understood;
+
+    if (cmd.kind == K::AnalyseMix)
+    {
+        updateMaster (true);
+        const auto& in = masterInFeatures.valid ? masterInFeatures : features;
+        setAnswer (MasterDoctor::explain (in, masterPlan, cmd.mixTopic) + "\n\n" + getMasterReport());
+        project.log (ProjectSession::Entry::Kind::Master, utf8 ("Analyse du mix présentée."));
+        statusMessage = in.valid ? utf8 ("Analyse du mix prête (") + juce::String (juce::roundToInt (in.durationSec)) + utf8 (" s écoutées).")
+                                 : utf8 ("Lance la lecture : FINISH mesure ton mix pendant que tu joues.");
+        pageRequest = 3;
+        ++resultVersion;
+        return true;
+    }
+    if (cmd.kind == K::Master)
+    {
+        setMasterCharacter (cmd.keepDark, cmd.keepBright);
+        if (getTargetIndex() == 0) applyRecommendedTarget();
+        setAnswer (getMasterReport());
+        statusMessage = cmd.keepDark ? utf8 ("Mastering : caractère sombre conservé (profil CHAUD, aucun aigu ajouté).") : utf8 ("Mastering réglé d'après l'analyse de ton mix.");
+        project.log (ProjectSession::Entry::Kind::Master, statusMessage);
+        pageRequest = 3;
+        ++resultVersion;
+        return true;
+    }
+
+    project.refreshDiagnosis();
+    const bool connected = project.getDiagnosis().connected();
+    if (! project.hasProject())
+    {
+        if (! connected)
+        {
+            if (composer.hasDNA()) return false;      // sketch mode: the older composer handles it
+            readLiveProject();                         // explains how to connect
+            return true;
+        }
+        pendingProjectCommand = text;
+        readLiveProject();
+        statusMessage = utf8 ("Je lis d'abord ton projet dans Live…");
+        return true;
+    }
+    if (cmd.kind == K::Send) { sendConfirmRequested = true; pageRequest = 0; ++resultVersion; return true; }
+    if (cmd.kind == K::UndoSend) { undoProjectSend(); return true; }
+
+    const auto out = project.apply (cmd);
+    if (out.needsProject) { pendingProjectCommand = text; readLiveProject(); return true; }
+    if (out.wantsSend) sendConfirmRequested = true;
+    if (out.wantsUndoSend) undoProjectSend();
+    if (out.wantsMaster && getTargetIndex() == 0) applyRecommendedTarget();
+    if (out.answer.isNotEmpty()) setAnswer (out.answer);
+    statusMessage = out.answer.upToFirstOccurrenceOf ("\n", false, false);
+    if (isPreviewingProject()) previewProject (getPreviewSection(), true);
+    pageRequest = 0;
+    ++resultVersion;
+    return true;
+}
+
 void FINISHAudioProcessor::finishMyTrack()
 {
     if (composing.load()) return;
@@ -465,6 +778,15 @@ void FINISHAudioProcessor::editComposer (const std::function<void (Composer&)>& 
 
 void FINISHAudioProcessor::refreshPreviewSequence()
 {
+    if (previewSource == 1)
+    {
+        if (project.getVersion() == projectPreviewVersion || ! project.hasPlan()) return;
+        projectPreviewVersion = project.getVersion();
+        const auto arr = project.previewArrangement();
+        previewBpm.store (arr.bpm);
+        preview.setSequence (PreviewSynth::compile (arr));
+        return;
+    }
     if (composer.getVersion() == previewSeqVersion) return;
     previewSeqVersion = composer.getVersion();
     if (! composer.hasArrangement()) return;
@@ -475,6 +797,7 @@ void FINISHAudioProcessor::refreshPreviewSequence()
 void FINISHAudioProcessor::previewSection (int sectionIndex, bool loop)
 {
     if (! composer.hasArrangement()) return;
+    if (previewSource != 0) { previewSource = 0; previewSeqVersion = -1; }
     refreshPreviewSequence();
     const auto& arr = composer.getArrangement();
     if (sectionIndex < 0 || sectionIndex >= (int) arr.sections.size())
@@ -573,6 +896,8 @@ void FINISHAudioProcessor::editTrack (const std::function<void (TrackEngine&)>& 
 void FINISHAudioProcessor::setIntent (const juce::String& text)
 {
     intentText = text.trim();
+    // FINISH 3: requests about the user's project / the mix go to the project session and the master doctor.
+    if (uiPage != 1 && handleProjectCommand (intentText)) return;
     const auto cmd = ComposeCommand::parse (intentText);
     auto parsed = IntentParser::parse (intentText);
     intent = parsed.intent;
@@ -705,8 +1030,11 @@ void FINISHAudioProcessor::getStateInformation (juce::MemoryBlock& dest)
     state.setProperty ("referencePath", reference.valid ? reference.path : juce::String(), nullptr);
     state.setProperty ("applied", appliedStrategy, nullptr);
 
-    for (auto* name : { "ANALYSIS", "TRACKMAP", "COMPOSE" })
+    for (auto* name : { "ANALYSIS", "TRACKMAP", "COMPOSE", "PROJECT" })
         state.removeChild (state.getChildWithName (name), nullptr);
+    state.appendChild (project.toState(), nullptr);
+    state.setProperty ("keepDark", keepDark, nullptr);
+    state.setProperty ("keepBright", keepBright, nullptr);
     if (composer.hasDNA())
         state.appendChild (composer.toState(), nullptr);
 
@@ -743,7 +1071,10 @@ void FINISHAudioProcessor::setStateInformation (const void* data, int size)
     auto analysis = state.getChildWithName ("ANALYSIS").createCopy();
     auto map = state.getChildWithName ("TRACKMAP").createCopy();
     auto compose = state.getChildWithName ("COMPOSE").createCopy();
-    for (auto* name : { "ANALYSIS", "TRACKMAP", "COMPOSE" })
+    auto projectState = state.getChildWithName ("PROJECT").createCopy();
+    keepDark = (bool) state.getProperty ("keepDark", false);
+    keepBright = (bool) state.getProperty ("keepBright", false);
+    for (auto* name : { "ANALYSIS", "TRACKMAP", "COMPOSE", "PROJECT" })
         state.removeChild (state.getChildWithName (name), nullptr);
     params.replaceState (state);
 
@@ -751,8 +1082,9 @@ void FINISHAudioProcessor::setStateInformation (const void* data, int size)
     const auto refPath = state.getProperty ("referencePath").toString();
     const auto applied = state.getProperty ("applied").toString();
 
-    auto restore = [this, text, refPath, applied, analysis, map, compose]
+    auto restore = [this, text, refPath, applied, analysis, map, compose, projectState]
     {
+        project.fromState (projectState);
         if (compose.isValid()) composer.fromState (compose);
         if (analysis.isValid())
         {

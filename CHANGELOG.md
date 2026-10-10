@@ -1,5 +1,25 @@
 # Changelog
 
+## 3.0.0
+- PROJECT mode: FINISH MY TRACK continues the user's own Ableton Live project instead of generating a new track.
+  - Remote Script v3 reads the set (tempo, signature, scale, locators, tracks, devices and drum pads, Arrangement and
+    Session clips with every MIDI note) and writes only into empty places on the user's own tracks: exact copies of
+    their clips (duplicate_clip_to_arrangement) or variations of their own notes; one Live undo step; undo from FINISH.
+  - Analysis of the real content: track roles (name, devices, note statistics), key from the notes, drum map from pad
+    names, existing structure from the per-bar activity, the strongest section's material per track, what is missing.
+  - Plan before writing: four intervention levels (complete / enrich / improve / finalise), three versions, per-track
+    locks, per-cell on/off, transition fills layered on a copy of the user's drum track, FX track, locators.
+  - Free commands with constraints ("sans toucher à ma mélodie"), ranges ("16 prochaines mesures"), iterations
+    ("plus subtil", "garde la version précédente", "uniquement la basse"), questions, send / undo with confirmation.
+  - Connection diagnosis (installed / selected / alive / version), Link vs Control Surface explained, journal.
+- Mastering from the mix's problems: 7-band balance vs genre landmarks or a reference, mud and presence bells,
+  mono-safe width and mono bass, punch-preserving leveller, profiles, intensity, "same level" target (never louder by
+  default), before/after measures and an explanation of every move.
+- Fixed: the 3-band leveller blended its band sum with the dry signal, which comb-filtered around 4 kHz and 120 Hz
+  (up to -3 dB in the 2-5 kHz presence region in 2.0). It is now level-based and phase-coherent.
+- Tests: protocol end to end (plugin <-> real Remote Script on a mock Live: read, plan, write 38 clips, read back,
+  undo, set identical), mastering before/after through the plugin, 11,800+ checks.
+
 ## 2.0.0
 - FINISH COMPOSE: FINISH MY TRACK now writes the missing parts of the song from what you played (a drop, a loop or a lone melody):
   - musical analysis of the played audio: tempo grid (host), key with confidence and relative major/minor resolution,

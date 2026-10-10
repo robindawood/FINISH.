@@ -209,9 +209,14 @@ def run(request_path, arrangement_api):
     shutil.rmtree(home, ignore_errors=True)
 
 
+from test_live_bridge_v3 import run_v3  # noqa: E402
+
 if __name__ == "__main__":
     path = sys.argv[1]
     # FX WAV paths in the request must exist for audio clips; they do when produced by the C++ test.
     run(path, True)
     run(path, False)
+    plan = sys.argv[2] if len(sys.argv) > 2 else None
+    run_v3(plan, live12=True)
+    run_v3(plan, live12=False)
     print("Live bridge: OK")

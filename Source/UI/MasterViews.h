@@ -10,9 +10,15 @@ public:
     explicit MasterView (FINISHAudioProcessor&);
     void tick();                 // 30 Hz from the editor
     void paint (juce::Graphics&) override;
+    void resized() override;
+    void showReport (bool);
 
 private:
     FINISHAudioProcessor& proc;
+    juce::TextButton reportButton;
+    juce::TextEditor reportText;
+    bool reportMode = false;
+    int reportTicks = 0;
     static constexpr int historySize = 600;   // 20 s at 30 Hz
     std::array<float, historySize> shortTerm {}, momentary {}, reduction {};
     int writePos = 0;
@@ -32,8 +38,10 @@ public:
 private:
     FINISHAudioProcessor& proc;
     std::array<juce::TextButton, numLoudnessTargets> targets;
+    std::array<juce::TextButton, numMasterProfiles> profiles;
     juce::Slider ceiling { juce::Slider::RotaryHorizontalVerticalDrag, juce::Slider::TextBoxBelow };
-    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> ceilingAttachment;
+    juce::Slider intensity { juce::Slider::RotaryHorizontalVerticalDrag, juce::Slider::TextBoxBelow };
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> ceilingAttachment, intensityAttachment;
 };
 
 // MASTER page console: the chain as a row of modules with their live values.

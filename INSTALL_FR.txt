@@ -1,40 +1,59 @@
-FINISH 2.0 - Installation et utilisation
+FINISH 3.0 - Installation et utilisation
 ========================================
 
 INSTALLER
-  Mac     : double-cliquez FINISH-2.0.0-macOS.pkg (VST3 + AU + pont Ableton Live).
+  Mac     : double-clique FINISH-3.0.0-macOS.pkg (VST3 + AU + script Ableton Live).
             Si macOS bloque : Réglages Système > Confidentialité et sécurité > « Ouvrir quand même ».
-  Windows : double-cliquez FINISH-2.0.0-Windows-Setup.exe (VST3 + pont Ableton Live).
-  Puis relancez le scan des plugins :
-    Ableton Live : Réglages > Plug-ins > Rescanner.
-    FL Studio    : Options > Manage plugins > Find more plugins.
+  Windows : double-clique FINISH-3.0.0-Windows-Setup.exe (VST3 + script Ableton Live).
+  Puis relance le scan des plugins (Ableton : Réglages > Plug-ins > Rescanner).
+  IMPORTANT : si Live était ouvert pendant l'installation, redémarre-le (il charge le nouveau script au démarrage).
 
-ACTIVER L'ENVOI DIRECT DANS ABLETON LIVE (une seule fois)
-  Réglages > Link, Tempo & MIDI > Control Surface : choisissez « FINISH »
-  (aucun port MIDI à régler). S'il n'apparaît pas, redémarrez Live.
+RELIER FINISH À TON PROJET LIVE (une seule fois)
+  Réglages de Live (Cmd+, / Ctrl+,) > onglet « Link, Tempo & MIDI » > une ligne « Control Surface » : choisis FINISH.
+  Entrée et Sortie : Aucun.  Le voyant ABLETON LIVE de FINISH passe au vert en 2 secondes.
+  Ce n'est PAS Ableton Link : Link sert seulement à synchroniser le tempo entre applis, FINISH n'en a pas besoin.
+  Si le voyant reste rouge/orange, FINISH affiche ce qui ne va pas (script absent, pas choisi, ancienne version, Live fermé).
 
-UTILISATION
-  1. Mettez FINISH en DERNIER sur la piste Master.
-  2. Jouez votre drop, une boucle ou même une simple mélodie (8 mesures ou plus), puis arrêtez.
-  3. Appuyez sur le gros bouton FINISH MY TRACK.
-     FINISH détecte tempo, tonalité, groove, basse, accords, mélodie et style,
-     écrit les parties manquantes (INTRO, BUILD, BREAK/BRIDGE, DROP 2, OUTRO, FX)
-     en 3 versions : FIDÈLE, ATMO, INTENSE, et allume le mastering (cible -11 LUFS).
-  4. Page COMPOSE :
-       - clic sur le nom d'une partie = écouter en boucle (sons intégrés de FINISH) ;
-       - cadenas = verrouiller ; dé = nouvelle idée ; clic droit = plus intense, plus sombre... ;
-       - tonalité / style / tempo : cliquez pour corriger si FINISH s'est trompé ;
-       - glissez n'importe quel clip vers votre DAW (MIDI ou WAV).
-  5. SEND TO LIVE : crée de NOUVELLES pistes « FINISH DRUMS / BASS / CHORDS / LEAD / PAD / FX »
-     avec les clips nommés INTRO, BUILD, DROP 2... (Arrangement dans Live 12, sinon nouvelles scènes).
-     Rien n'est supprimé ni remplacé dans votre projet.
-     EXPORT : tout dans Musique/FINISH (MIDI multipiste + clips par section + WAV + guide), pour FL Studio et les autres DAW.
-  6. Le MIDI ne contient pas de sons : FINISH charge un instrument d'Ableton quand il peut,
-     sinon le guide (LISEZ-MOI FINISH.txt) dit quoi mettre sur chaque piste.
-  7. Écrivez ce que vous voulez dans la barre du haut puis Entrée :
-       « finis mon morceau », « crée un bridge mélodique sombre », « ajoute un build-up avant le drop »,
-       « crée un outro progressif », « rends le drop plus percutant », « masterise pour le club »...
-  8. Page MASTER : cible STREAM -14 / BALANCED -11 / CLUB -9 / LOUD -7, plafond true-peak,
-     chaîne en direct (équilibre tonal, leveller 3 bandes, drive, clipper, limiteur true-peak).
-     A/B compare à volume égal.
-  9. Page SECTIONS : votre morceau complet section par section (variations, transitions).
+TERMINER TON MORCEAU (page PROJET)
+  1. Mets FINISH en DERNIER sur la piste Master.
+  2. Appuie sur FINISH. Il LIT ton set : pistes, instruments, clips (Arrangement et Session) et toutes tes notes MIDI.
+     Il te dit ce qu'il a compris : rôle de chaque piste, tonalité (calculée sur tes notes), structure (INTRO 1-16, DROP 17-24...),
+     ce qui manque, ce qui est trop court, ce que tu devras faire toi-même.
+  3. Il propose un PLAN, sans rien écrire : les parties à ajouter, et pour chacune de tes pistes ce qu'elle joue
+     (copie exacte de ton clip, ou variation de TES notes : roulement sur ta caisse claire, montée, ton motif ralenti,
+     réponse à ta mélodie, basse simplifiée, accords tenus...). Hachuré = déjà dans ton set ; couleur = à ajouter.
+       - clic sur une partie = aperçu approximatif (sons de FINISH) ; clic droit = autre variante ;
+       - clic sur une case = couper cette piste à cet endroit ; clic sur un nom de piste = la verrouiller (copies exactes seulement) ;
+       - INTERVENTION : COMPLÉTER (aucune note nouvelle) / ENRICHIR / AMÉLIORER (+ transitions, piste FX) / FINALISER (+ mastering) ;
+       - VERSION V1 / V2 / V3 : trois idées pour chaque partie.
+  4. ENVOYER DANS LIVE (confirmation demandée) : tout est écrit sur TES pistes, avec TES instruments et effets.
+     Aucun de tes clips n'est modifié ni déplacé ; une place déjà occupée est sautée et signalée.
+     Le compte rendu dit ce qui a été écrit, sauté, et ce qui reste à faire.
+     ANNULER L'ENVOI retire tout ce que FINISH vient d'ajouter (ou Cmd/Ctrl+Z dans Live).
+  Live 12 conseillé (création de clips dans l'Arrangement). Live 11 : copies de clips possibles, le reste est signalé.
+
+PARLER À FINISH (barre du haut, puis Entrée)
+  « termine mon morceau sans toucher à ma mélodie principale »
+  « fais monter progressivement l'énergie pendant les 16 prochaines mesures »
+  « rends mon drop plus puissant sans modifier la ligne de basse »   (FINISH écrit un DROP 2 renforcé, ton drop reste intact)
+  « ajoute des variations de drums en conservant mon groove »
+  « crée une transition plus fluide entre le break et le drop »
+  « propose trois versions différentes de mon build-up »             (puis V1 / V2 / V3)
+  « écoute et analyse ce que j'ai déjà créé, puis dis-moi ce qui manque »
+  « analyse mon mix et explique-moi pourquoi il manque de punch »
+  « améliore le mastering en conservant le caractère sombre »
+  puis : « plus subtil », « plus sombre », « garde la version précédente », « modifie uniquement la basse », « envoie dans Live »,
+  « annule l'envoi ».  Bouton JOURNAL : tout ce qui a été analysé, généré, envoyé, et ce qui reste à faire.
+
+MASTERING (page MASTER)
+  Joue ton morceau (au moins 20 s, idéalement le passage le plus fort) : FINISH mesure ton mix en continu
+  (équilibre en 7 zones, crêtes, dynamique, stéréo et compatibilité mono, saturation) et ne corrige que ce qui sort des repères.
+  - Cible : MÊME NIV. (corrige sans monter le volume), STREAM -14, BALANCED -11, CLUB -9, LOUD -7. Par défaut FINISH
+    choisit MÊME NIV. si ton mix est déjà assez fort : jamais plus fort « par principe ».
+  - Profil AUTO / PUNCH / CHAUD (garde le caractère sombre) / OUVERT, et INTENSITÉ.
+  - ANALYSE (en haut à droite de l'écran) : ce qui a été mesuré, ce qui a été fait et pourquoi, tableau AVANT -> APRÈS.
+  - MATCH : l'A/B compare à volume égal (sinon le plus fort paraît toujours meilleur).
+  - Charge une référence (REFERENCE) pour comparer à un morceau que tu aimes au lieu des repères génériques.
+
+SANS ABLETON LIVE (FL Studio...)
+  Page ESQUISSE : FINISH écoute ton morceau et propose des parties en MIDI à glisser dans ton DAW, ou EXPORT dans Musique/FINISH.

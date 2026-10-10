@@ -36,6 +36,11 @@ public:
         float clip = 0.0f;           // 0..1 soft clipper in front of the limiter (shaves transients cleanly)
         float eqLowDb = 0.0f;        // tonal balance correction, low shelf 110 Hz
         float eqHighDb = 0.0f;       // tonal balance correction, high shelf 9 kHz
+        float eqMudDb = 0.0f;        // bell 300 Hz (low-mid build-up)
+        float eqPresDb = 0.0f;       // bell 3.2 kHz (presence / harshness)
+        float sideDb = 0.0f;         // master width: side gain (dB)
+        float monoBass = 0.0f;       // 0..1: sides below 160 Hz removed
+        float punchKeep = 0.0f;      // 0..1: slower leveller attack so transients pass
         double bpm = 120.0;          // host tempo (for gate / echo)
         double ppq = -1.0;           // host position in quarter notes at block start (-1 = free running)
     };
@@ -52,6 +57,7 @@ public:
     float getOutputMomentary() const noexcept    { return outMomentary.load(); }
     float getGainReductionDb() const noexcept    { return grDb.load(); }
     float getTruePeakDb() const noexcept         { return truePeakDb.load(); }
+    float takeMaxPeakDb() noexcept               { return maxPeakDb.exchange (-100.0f); }   // highest output peak since the last call
     float getMatchGainDb() const noexcept        { return matchDb.load(); }
     float getLoudnessCorrectionDb() const noexcept { return corrDbOut.load(); }
     // Per-band leveller gain reduction (dB) for low / mid / high, and clipper activity (dB shaved).
@@ -115,7 +121,10 @@ private:
     std::vector<float> wetL, wetR, dryL, dryR;
 
     // Mastering: tonal balance shelves, 3-band leveller (Linkwitz-Riley 4th order splits), soft clipper
-    Biquad mEqLow, mEqHigh, nyqA, nyqB;   // nyq*: removes energy right below Nyquist (it makes unpredictable inter-sample peaks)
+    Biquad mEqLow, mEqHigh, mEqMud, mEqPres, nyqA, nyqB;
+    Biquad msSideLoA, msSideLoB;          // 4th-order high-pass on the sides (160 Hz): mono bass
+    juce::SmoothedValue<float> sEqMud, sEqPres, sSide, sMono, sLevOn;
+    float lastEqMud = 1000.0f, lastEqPres = 1000.0f, lastPunchKeep = -1.0f;   // nyq*: removes energy right below Nyquist (it makes unpredictable inter-sample peaks)
     float lastEqLow = 1000.0f, lastEqHigh = 1000.0f;
     juce::SmoothedValue<float> sEqLow, sEqHigh, sGlue, sClip;
     Biquad xLow1a, xLow1b, xHigh1a, xHigh1b;          // split 1 (120 Hz)
@@ -152,6 +161,7 @@ private:
     float peakHoldDb = -100.0f;
     float corrDb = 0.0f;                 // closed-loop loudness correction (audio time, deterministic)
     std::atomic<float> corrDbOut { 0.0f };
+    std::atomic<float> maxPeakDb { -100.0f };
 
     std::atomic<float> inLufs { -70.0f }, outLufs { -70.0f }, outMomentary { -70.0f }, grDb { 0.0f }, truePeakDb { -100.0f }, matchDb { 0.0f };
 };

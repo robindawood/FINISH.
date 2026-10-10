@@ -1,13 +1,22 @@
-# FINISH bridge for Ableton Live (Remote Script).
+# FINISH bridge for Ableton Live (Remote Script) - version 3.
 #
-# The FINISH plugin writes an arrangement request (JSON) into  ~/Music/FINISH/inbox/request.json.
-# This script picks it up and builds it in the open Live set:
-#   - NEW tracks only ("FINISH DRUMS", "FINISH BASS", ...): nothing existing is modified or deleted.
-#   - MIDI clips per section (INTRO, BUILD, BREAK, DROP 2, OUTRO...), placed in the Arrangement when this
-#     version of Live allows it (Live 12), otherwise in new Session scenes named after the sections.
-#   - FX audio clips (risers, impacts...) when Live can create audio clips from files.
-#   - Tries to load a Live instrument on each new track; reports what it could not load.
-# The result is written to ~/Music/FINISH/inbox/response.json and shown in Live's status bar.
+# Select "FINISH" once in Live > Settings > Link, Tempo & MIDI > Control Surface (Input/Output: None).
+# This is NOT Ableton Link: Link only shares tempo between apps; this script is what lets FINISH read and
+# write your Live set.
+#
+# Talks with the FINISH plugin through files in ~/Music/FINISH/inbox:
+#   bridge.json    heartbeat (every ~2 s): alive, Live version, what this Live allows, current set summary
+#   request.json   one request from the plugin:
+#       {"type": "snapshot"}  -> writes project.json: tempo, signature, scale, locators, loop, selection,
+#                                tracks (devices, drum pads), Arrangement and Session clips with their MIDI notes
+#       {"type": "apply", "ops": [...]} -> writes clips onto the user's tracks in EMPTY places only (copies of
+#                                the user's own clips, or variations of them), optional new FX track, locators.
+#                                One Live undo step; every created object is remembered for "undo".
+#       {"type": "undo", "target": "<apply id>"} -> removes what that apply created
+#       (no type)             -> legacy v2 request: new FINISH tracks with generated parts
+#   response.json  the answer, with a report of what was done / skipped
+#
+# Never modifies or deletes anything the user made.
 
 import json
 import os
@@ -18,7 +27,12 @@ try:
 except Exception:  # pragma: no cover - tests outside Live
     Live = None
 
-POLL_EVERY = 4  # update_display ticks (~100 ms each)
+BRIDGE_VERSION = "3.0"
+POLL_EVERY = 3          # update_display ticks (~100 ms each)
+HEARTBEAT_EVERY = 20
+MAX_NOTES_PER_CLIP = 6000
+EPS = 1e-4
+
 INSTRUMENTS = {
     "BASS": ["Drift", "Analog", "Operator", "Wavetable"],
     "CHORDS": ["Drift", "Wavetable", "Analog", "Operator"],
@@ -32,23 +46,42 @@ def inbox_dir():
     return os.path.join(os.path.expanduser("~"), "Music", "FINISH", "inbox")
 
 
+def _write_json(name, data):
+    path = os.path.join(inbox_dir(), name)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f)
+    os.replace(tmp, path)
+
+
+def _safe(fn, default=None):
+    try:
+        return fn()
+    except Exception:
+        return default
+
+
 class FinishBridge(object):
     def __init__(self, c_instance):
         self._c = c_instance
         self._tick = 0
         self._busy = False
-        self._log("FINISH bridge ready (inbox: %s)" % inbox_dir())
+        self._history = {}        # apply id -> created objects
+        self._last_apply = ""
+        self._log("FINISH bridge %s ready (inbox: %s)" % (BRIDGE_VERSION, inbox_dir()))
         try:
             os.makedirs(inbox_dir(), exist_ok=True)
-            # Let the plugin know the bridge is alive.
-            with open(os.path.join(inbox_dir(), "bridge.json"), "w") as f:
-                json.dump({"alive": True, "time": time.time(), "live": self._live_version()}, f)
         except Exception as e:
             self._log("cannot create inbox: %s" % e)
+        self._heartbeat()
 
     # ------------------------------------------------------------------ Live control-surface API
     def disconnect(self):
-        pass
+        try:
+            _write_json("bridge.json", {"alive": False, "time": time.time(), "version": BRIDGE_VERSION,
+                                        "live": self._live_version()})
+        except Exception:
+            pass
 
     def connect_script_instances(self, instanciated_scripts):
         pass
@@ -82,12 +115,15 @@ class FinishBridge(object):
 
     def update_display(self):
         self._tick += 1
+        if self._tick % HEARTBEAT_EVERY == 0:
+            self._heartbeat()
         if self._tick % POLL_EVERY != 0 or self._busy:
             return
         path = os.path.join(inbox_dir(), "request.json")
         if not os.path.exists(path):
             return
         self._busy = True
+        request = {}
         try:
             work = path + ".working"
             try:
@@ -96,15 +132,27 @@ class FinishBridge(object):
                 return
             with open(work, "r", encoding="utf-8") as f:
                 request = json.load(f)
-            response = self._build(request)
             try:
                 os.remove(work)
             except Exception:
                 pass
+            kind = request.get("type", "build")
+            if kind == "snapshot":
+                response = self._snapshot(request)
+            elif kind == "apply":
+                response = self._apply(request)
+            elif kind == "undo":
+                response = self._undo(request)
+            elif kind == "ping":
+                response = {"ok": True, "message": "FINISH connecte a Live %s" % self._live_version()}
+            else:
+                response = self._build(request)
         except Exception as e:
             response = {"ok": False, "error": "FINISH bridge error: %s" % e}
         finally:
             self._busy = False
+        response["id"] = request.get("id", "")
+        response["type"] = request.get("type", "build")
         self._respond(response)
 
     # ------------------------------------------------------------------ helpers
@@ -116,7 +164,8 @@ class FinishBridge(object):
 
     def _status(self, msg):
         try:
-            self._c.show_message("FINISH: " + msg)
+            if msg:
+                self._c.show_message("FINISH: " + msg)
         except Exception:
             pass
 
@@ -127,28 +176,477 @@ class FinishBridge(object):
         except Exception:
             return "?"
 
+    def _capabilities(self):
+        song = self.song()
+        t = song.tracks[0] if len(song.tracks) else None
+        caps = {
+            "arrangement_read": t is not None and hasattr(t, "arrangement_clips"),
+            "create_midi_clip": t is not None and hasattr(t, "create_midi_clip"),
+            "create_audio_clip": t is not None and hasattr(t, "create_audio_clip"),
+            "duplicate_to_arrangement": t is not None and hasattr(t, "duplicate_clip_to_arrangement"),
+            "delete_clip": t is not None and hasattr(t, "delete_clip"),
+            "undo_step": hasattr(song, "begin_undo_step"),
+            "notes_extended": Live is not None and hasattr(Live, "Clip") and hasattr(Live.Clip, "MidiNoteSpecification"),
+        }
+        return caps
+
+    def _heartbeat(self):
+        try:
+            song = self.song()
+            data = {"alive": True, "time": time.time(), "version": BRIDGE_VERSION, "live": self._live_version(),
+                    "tempo": _safe(lambda: float(song.tempo), 0.0),
+                    "tracks": _safe(lambda: len(song.tracks), 0),
+                    "playing": _safe(lambda: bool(song.is_playing), False),
+                    "caps": _safe(self._capabilities, {}),
+                    "lastApply": self._last_apply}
+            _write_json("bridge.json", data)
+        except Exception as e:
+            self._log("heartbeat failed: %s" % e)
+
     def _respond(self, response):
         try:
             response["time"] = time.time()
-            with open(os.path.join(inbox_dir(), "response.json.tmp"), "w", encoding="utf-8") as f:
-                json.dump(response, f)
-            os.replace(os.path.join(inbox_dir(), "response.json.tmp"), os.path.join(inbox_dir(), "response.json"))
+            _write_json("response.json", response)
         except Exception as e:
             self._log("cannot write response: %s" % e)
         self._status(response.get("message", response.get("error", "")))
+
+    # ------------------------------------------------------------------ reading the set
+    def _notes_of(self, clip):
+        out = []
+        try:
+            if hasattr(clip, "get_notes_extended"):
+                first = min(0.0, _safe(lambda: float(clip.loop_start), 0.0), _safe(lambda: float(clip.start_marker), 0.0))
+                last = max(_safe(lambda: float(clip.loop_end), 0.0), _safe(lambda: float(clip.end_marker), 0.0),
+                           _safe(lambda: float(clip.length), 0.0)) + 1.0
+                try:
+                    notes = clip.get_notes_extended(0, 128, first, last - first)
+                except Exception:
+                    notes = clip.get_notes_extended(0, 128, 0.0, last)
+                for n in notes:
+                    if getattr(n, "mute", False):
+                        continue
+                    out.append([int(n.pitch), round(float(n.start_time), 5), round(float(n.duration), 5),
+                                int(round(float(n.velocity)))])
+                    if len(out) >= MAX_NOTES_PER_CLIP:
+                        break
+            elif hasattr(clip, "get_notes"):
+                for n in clip.get_notes(-16384.0, 0, 1.0e6, 128):
+                    pitch, start, dur, vel, mute = n[0], n[1], n[2], n[3], n[4]
+                    if mute:
+                        continue
+                    out.append([int(pitch), round(float(start), 5), round(float(dur), 5), int(round(float(vel)))])
+                    if len(out) >= MAX_NOTES_PER_CLIP:
+                        break
+        except Exception as e:
+            self._log("notes read failed: %s" % e)
+        out.sort(key=lambda n: (n[1], n[0]))
+        return out
+
+    def _clip_info(self, clip, where, index):
+        is_midi = bool(_safe(lambda: clip.is_midi_clip, False))
+        info = {
+            "where": where, "index": index,
+            "name": _safe(lambda: clip.name, "") or "",
+            "midi": is_midi,
+            "start": _safe(lambda: float(clip.start_time), 0.0),
+            "end": _safe(lambda: float(clip.end_time), 0.0),
+            "length": _safe(lambda: float(clip.length), 0.0),
+            "loopStart": _safe(lambda: float(clip.loop_start), 0.0),
+            "loopEnd": _safe(lambda: float(clip.loop_end), 0.0),
+            "looping": _safe(lambda: bool(clip.looping), False),
+            "muted": _safe(lambda: bool(clip.muted), False),
+            "color": _safe(lambda: int(clip.color), 0),
+        }
+        if where == "session":
+            info["start"] = 0.0
+            info["end"] = info["length"]
+        if is_midi:
+            info["notes"] = self._notes_of(clip)
+        else:
+            info["file"] = _safe(lambda: clip.file_path, "") or ""
+            info["warping"] = _safe(lambda: bool(clip.warping), False)
+        return info
+
+    def _device_info(self, d):
+        info = {"name": _safe(lambda: d.name, ""), "class": _safe(lambda: d.class_name, ""),
+                "type": _safe(lambda: int(d.type), 0)}
+        if _safe(lambda: d.can_have_drum_pads, False):
+            pads = []
+            for p in _safe(lambda: list(d.drum_pads), []):
+                if _safe(lambda: len(p.chains), 0) > 0:
+                    pads.append([_safe(lambda: int(p.note), 0), _safe(lambda: p.name, "")])
+            info["pads"] = pads
+        return info
+
+    def _track_info(self, track, index, selected):
+        is_midi = bool(_safe(lambda: track.has_midi_input, False))
+        info = {
+            "index": index, "name": _safe(lambda: track.name, ""),
+            "midi": is_midi, "color": _safe(lambda: int(track.color), 0),
+            "mute": _safe(lambda: bool(track.mute), False),
+            "group": bool(_safe(lambda: track.is_foldable, False)),
+            "grouped": bool(_safe(lambda: track.is_grouped, False)),
+            "frozen": bool(_safe(lambda: track.is_frozen, False)),
+            "selected": track == selected,
+            "devices": [self._device_info(d) for d in _safe(lambda: list(track.devices), [])],
+            "arrangement": [], "session": [],
+        }
+        if hasattr(track, "arrangement_clips"):
+            for i, clip in enumerate(_safe(lambda: list(track.arrangement_clips), [])):
+                info["arrangement"].append(self._clip_info(clip, "arrangement", i))
+        for si, slot in enumerate(_safe(lambda: list(track.clip_slots), [])):
+            if _safe(lambda: slot.has_clip, False):
+                ci = self._clip_info(slot.clip, "session", si)
+                info["session"].append(ci)
+        return info
+
+    def _snapshot(self, req):
+        song = self.song()
+        t0 = time.time()
+        selected = _safe(lambda: song.view.selected_track, None)
+        detail = _safe(lambda: song.view.detail_clip, None)
+        tracks = []
+        detail_ref = None
+        for i, track in enumerate(song.tracks):
+            info = self._track_info(track, i, selected)
+            tracks.append(info)
+            if detail is not None and detail_ref is None:
+                for c in _safe(lambda: list(track.arrangement_clips), []) if hasattr(track, "arrangement_clips") else []:
+                    if c == detail:
+                        detail_ref = {"track": i, "start": _safe(lambda: float(c.start_time), 0.0)}
+                for slot_i, slot in enumerate(_safe(lambda: list(track.clip_slots), [])):
+                    if _safe(lambda: slot.has_clip, False) and slot.clip == detail:
+                        detail_ref = {"track": i, "slot": slot_i}
+        project = {
+            "bridge": BRIDGE_VERSION, "live": self._live_version(), "caps": self._capabilities(),
+            "time": time.time(),
+            "tempo": float(song.tempo),
+            "signature": [_safe(lambda: int(song.signature_numerator), 4), _safe(lambda: int(song.signature_denominator), 4)],
+            "rootNote": _safe(lambda: int(song.root_note), -1),
+            "scale": _safe(lambda: song.scale_name, "") or "",
+            "songLength": _safe(lambda: float(song.song_length), 0.0),
+            "loop": [_safe(lambda: float(song.loop_start), 0.0), _safe(lambda: float(song.loop_length), 0.0),
+                     _safe(lambda: bool(song.loop), False)],
+            "position": _safe(lambda: float(song.current_song_time), 0.0),
+            "cues": [[_safe(lambda: c.name, ""), _safe(lambda: float(c.time), 0.0)] for c in _safe(lambda: list(song.cue_points), [])],
+            "scenes": [_safe(lambda: s.name, "") for s in _safe(lambda: list(song.scenes), [])],
+            "selectedTrack": next((t["index"] for t in tracks if t["selected"]), -1),
+            "detailClip": detail_ref,
+            "tracks": tracks,
+        }
+        _write_json("project.json", project)
+        n_clips = sum(len(t["arrangement"]) + len(t["session"]) for t in tracks)
+        n_notes = sum(len(c.get("notes", [])) for t in tracks for c in t["arrangement"] + t["session"])
+        msg = "projet lu : %d pistes, %d clips, %d notes (%.0f ms)" % (len(tracks), n_clips, n_notes, (time.time() - t0) * 1000)
+        self._log(msg)
+        return {"ok": True, "message": msg, "file": os.path.join(inbox_dir(), "project.json"),
+                "tracks": len(tracks), "clips": n_clips, "notes": n_notes}
+
+    # ------------------------------------------------------------------ writing
+    def _find_track(self, op, created_tracks):
+        song = self.song()
+        ref = op.get("track")
+        if isinstance(ref, str) and ref.startswith("@"):
+            return created_tracks.get(ref)
+        name = op.get("trackName", None)
+        tracks = list(song.tracks)
+        try:
+            idx = int(ref)
+        except Exception:
+            idx = -1
+        if 0 <= idx < len(tracks) and (name is None or tracks[idx].name == name):
+            return tracks[idx]
+        if name is not None:
+            for t in tracks:
+                if t.name == name:
+                    return t
+        return None
+
+    def _source_clip(self, track_obj, src):
+        if not src:
+            return None
+        song = self.song()
+        tracks = list(song.tracks)
+        t = track_obj
+        if "track" in src:
+            ti = int(src["track"])
+            if 0 <= ti < len(tracks):
+                t = tracks[ti]
+        try:
+            if src.get("where") == "session":
+                slot = t.clip_slots[int(src["index"])]
+                return slot.clip if slot.has_clip else None
+            if "start" in src:
+                for c in t.arrangement_clips:
+                    if abs(float(c.start_time) - float(src["start"])) < EPS:
+                        return c
+            clips = list(t.arrangement_clips)
+            i = int(src.get("index", -1))
+            return clips[i] if 0 <= i < len(clips) else None
+        except Exception:
+            return None
+
+    def _occupied(self, track, start, end):
+        try:
+            for c in track.arrangement_clips:
+                cs, ce = float(c.start_time), float(c.end_time)
+                if cs < end - EPS and ce > start + EPS:
+                    return c
+        except Exception:
+            pass
+        return None
 
     def _add_notes(self, clip, notes):
         if not notes:
             return
         if hasattr(clip, "add_new_notes") and Live is not None and hasattr(Live.Clip, "MidiNoteSpecification"):
             specs = []
-            for p, s, d, v in notes:
+            for n in notes:
+                p, s, d, v = n[0], n[1], n[2], n[3]
                 specs.append(Live.Clip.MidiNoteSpecification(pitch=int(p), start_time=float(s), duration=float(d),
                                                              velocity=float(v), mute=False))
             clip.add_new_notes(tuple(specs))
         else:
-            clip.set_notes(tuple((int(p), float(s), float(d), float(v), False) for p, s, d, v in notes))
+            clip.set_notes(tuple((int(n[0]), float(n[1]), float(n[2]), float(n[3]), False) for n in notes))
 
+    def _clear_notes(self, clip):
+        if hasattr(clip, "remove_notes_extended"):
+            clip.remove_notes_extended(0, 128, -16384.0, 1.0e6)
+        elif hasattr(clip, "remove_notes"):
+            clip.remove_notes(-16384.0, 0, 1.0e6, 128)
+
+    def _midi_clip_at(self, track, start, length, notes, name, record):
+        """Creates an arrangement MIDI clip with `notes` (beats relative to start)."""
+        song = self.song()
+        if hasattr(track, "create_midi_clip"):
+            clip = track.create_midi_clip(start, length)
+            clip.name = name
+            self._add_notes(clip, notes)
+            record.append(("clip", track, start, name))
+            return "created"
+        # Live 11: build it in a temporary Session slot, copy it to the Arrangement, remove the temporary clip.
+        if hasattr(track, "duplicate_clip_to_arrangement"):
+            song.create_scene(-1)
+            scene_i = len(song.scenes) - 1
+            slot = track.clip_slots[scene_i]
+            slot.create_clip(length)
+            tmp = slot.clip
+            tmp.name = name
+            self._add_notes(tmp, notes)
+            track.duplicate_clip_to_arrangement(tmp, start)
+            slot.delete_clip()
+            song.delete_scene(scene_i)
+            record.append(("clip", track, start, name))
+            return "created"
+        raise RuntimeError("cette version de Live ne permet pas de creer des clips dans l'Arrangement")
+
+    def _place(self, op, track, created_tracks, record, report):
+        start = float(op.get("start", 0.0))
+        length = max(0.25, float(op.get("length", 4.0)))
+        name = op.get("name", "FINISH")
+        busy = self._occupied(track, start, start + length)
+        if busy is not None:
+            report["skipped"].append("%s : mesures %d-%d deja occupees par '%s' (rien ecrit)" % (
+                track.name, int(start // 4) + 1, int((start + length) // 4), busy.name))
+            return
+        notes = op.get("notes", None)
+        src = self._source_clip(track, op.get("source"))
+        file_path = op.get("file", "")
+
+        if file_path:
+            if not os.path.exists(file_path):
+                report["skipped"].append("%s : fichier introuvable %s" % (track.name, file_path))
+                return
+            if not hasattr(track, "create_audio_clip"):
+                report["manual"].append("Glisse %s sur la piste %s a la mesure %d (Live 12 requis pour le faire automatiquement)"
+                                        % (os.path.basename(file_path), track.name, int(start // 4) + 1))
+                return
+            clip = track.create_audio_clip(file_path, start)
+            clip.name = name
+            record.append(("clip", track, start, name))
+            report["written"] += 1
+            return
+
+        # Exact copy of the user's clip (keeps sound, envelopes, warp...): tile it over the length.
+        if notes is None and src is not None and hasattr(track, "duplicate_clip_to_arrangement"):
+            if op.get("unit"):
+                src_len = max(0.25, float(op["unit"]))
+            else:
+                src_len = max(0.25, float(_safe(lambda: src.end_time - src.start_time, 0.0) or _safe(lambda: src.length, 4.0)))
+            t = start
+            while t < start + length - EPS:
+                track.duplicate_clip_to_arrangement(src, t)
+                record.append(("clip", track, t, _safe(lambda: src.name, "")))
+                t += src_len
+            report["written"] += 1
+            report["copied"] += 1
+            return
+        if notes is None and src is not None and _safe(lambda: src.is_midi_clip, False):
+            notes = op.get("fallbackNotes", None)
+        if notes is None:
+            if src is not None and not _safe(lambda: src.is_midi_clip, True):
+                report["manual"].append("%s : copie le clip audio '%s' a la mesure %d (cette version de Live ne permet pas la copie automatique)"
+                                        % (track.name, src.name, int(start // 4) + 1))
+            else:
+                report["skipped"].append("%s : clip source introuvable" % track.name)
+            return
+        if not _safe(lambda: track.has_midi_input, True):
+            report["skipped"].append("%s : piste audio, impossible d'y ecrire des notes" % track.name)
+            return
+        self._midi_clip_at(track, start, length, notes, name, record)
+        report["written"] += 1
+        report["varied"] += 1
+
+    def _alt_track(self, op, created_tracks, record, report):
+        """An empty copy of one of the user's tracks (same instrument and effects) for layers over existing bars."""
+        song = self.song()
+        src = self._find_track(op, created_tracks)
+        if src is None:
+            report["errors"].append("piste introuvable : %s" % op.get("trackName"))
+            return
+        if not hasattr(song, "duplicate_track"):
+            report["manual"].append("Transitions sur tes sections existantes : cette version de Live ne permet pas de copier une piste.")
+            return
+        tracks = list(song.tracks)
+        index = tracks.index(src)
+        song.duplicate_track(index)
+        t = song.tracks[index + 1]
+        # Empty it: the copy keeps the instrument and effects, not the clips.
+        clips = list(_safe(lambda: t.arrangement_clips, []) or [])
+        if clips and not hasattr(t, "delete_clip"):
+            song.delete_track(index + 1)
+            report["manual"].append("Transitions sur tes sections existantes : Live 12 requis (copie de piste a vider).")
+            return
+        for c in clips:
+            t.delete_clip(c)
+        for slot in _safe(lambda: list(t.clip_slots), []):
+            if _safe(lambda: slot.has_clip, False):
+                slot.delete_clip()
+        t.name = op.get("name", src.name + " FINISH")
+        _safe(lambda: setattr(t, "mute", False))
+        created_tracks[op.get("ref", "@alt")] = t
+        record.append(("track", t, 0.0, t.name))
+        report["tracks"].append(t.name)
+
+    def _apply(self, req):
+        song = self.song()
+        ops = req.get("ops", [])
+        if not ops:
+            return {"ok": False, "error": "Rien a envoyer."}
+        record = []
+        created_tracks = {}
+        report = {"written": 0, "copied": 0, "varied": 0, "skipped": [], "manual": [], "errors": [], "tracks": [], "cues": 0}
+        undo_step = hasattr(song, "begin_undo_step")
+        if undo_step:
+            _safe(song.begin_undo_step)
+        try:
+            for op in ops:
+                kind = op.get("op", "clip")
+                try:
+                    if kind == "newTrack":
+                        if op.get("kind") == "audio" and len(song.tracks) and not hasattr(song.tracks[0], "create_audio_clip"):
+                            report["manual"].append("Effets de transition : glisse les WAV du dossier ~/Music/FINISH/fx sur une piste audio "
+                                                    "(Live 12 requis pour le faire automatiquement)")
+                            continue
+                        index = len(song.tracks)
+                        if op.get("kind") == "audio":
+                            song.create_audio_track(index)
+                        else:
+                            song.create_midi_track(index)
+                        t = song.tracks[index]
+                        t.name = op.get("name", "FINISH")
+                        if "color" in op:
+                            _safe(lambda: setattr(t, "color", int(op["color"])))
+                        created_tracks[op.get("ref", "@new")] = t
+                        record.append(("track", t, 0.0, t.name))
+                        report["tracks"].append(t.name)
+                    elif kind == "altTrack":
+                        self._alt_track(op, created_tracks, record, report)
+                    elif kind == "cue":
+                        tm = float(op.get("time", 0.0))
+                        if _safe(lambda: bool(song.is_playing), False):
+                            report["manual"].append("Locator '%s' non pose (Live jouait)" % op.get("name", ""))
+                            continue
+                        exists = any(abs(float(c.time) - tm) < EPS for c in _safe(lambda: list(song.cue_points), []))
+                        if not exists and hasattr(song, "set_or_delete_cue"):
+                            old = _safe(lambda: float(song.current_song_time), 0.0)
+                            song.current_song_time = tm
+                            song.set_or_delete_cue()
+                            for c in song.cue_points:
+                                if abs(float(c.time) - tm) < EPS:
+                                    _safe(lambda: setattr(c, "name", op.get("name", "FINISH")))
+                            song.current_song_time = old
+                            record.append(("cue", None, tm, op.get("name", "")))
+                            report["cues"] += 1
+                    else:
+                        track = self._find_track(op, created_tracks)
+                        if track is None and str(op.get("track", "")).startswith("@"):
+                            continue   # its track could not be created (already reported)
+                        if track is None:
+                            report["errors"].append("piste introuvable : %s" % op.get("trackName", op.get("track")))
+                            continue
+                        self._place(op, track, created_tracks, record, report)
+                except Exception as e:
+                    report["errors"].append("%s : %s" % (op.get("trackName", kind), e))
+        finally:
+            if undo_step:
+                _safe(song.end_undo_step)
+        aid = req.get("id", "")
+        self._history[aid] = record
+        self._last_apply = aid
+        msg = "%d clips ecrits (%d copies de tes clips, %d variations)" % (report["written"], report["copied"], report["varied"])
+        if report["skipped"]:
+            msg += ", %d ignores (place occupee)" % len(report["skipped"])
+        if report["tracks"]:
+            msg += ", %d piste(s) ajoutee(s)" % len(report["tracks"])
+        self._log(msg)
+        ok = report["written"] > 0 or report["cues"] > 0
+        return {"ok": ok, "message": msg if ok else "Rien n'a pu etre ecrit", "report": report,
+                "undoable": True, "canDelete": hasattr(song.tracks[0], "delete_clip") if len(song.tracks) else False}
+
+    def _undo(self, req):
+        song = self.song()
+        target = req.get("target", self._last_apply)
+        record = self._history.get(target)
+        if not record:
+            return {"ok": False, "error": "Rien a annuler depuis FINISH (utilise Cmd/Ctrl+Z dans Live)."}
+        removed, failed = 0, 0
+        for kind, track, start, name in reversed(record):
+            try:
+                if kind == "clip":
+                    if not hasattr(track, "delete_clip"):
+                        failed += 1
+                        continue
+                    for c in list(track.arrangement_clips):
+                        if abs(float(c.start_time) - start) < EPS:
+                            track.delete_clip(c)
+                            removed += 1
+                            break
+                elif kind == "track":
+                    tracks = list(song.tracks)
+                    if track in tracks:
+                        song.delete_track(tracks.index(track))
+                        removed += 1
+                elif kind == "cue":
+                    for c in song.cue_points:
+                        if abs(float(c.time) - start) < EPS:
+                            old = _safe(lambda: float(song.current_song_time), 0.0)
+                            song.current_song_time = start
+                            song.set_or_delete_cue()
+                            song.current_song_time = old
+                            removed += 1
+                            break
+            except Exception:
+                failed += 1
+        del self._history[target]
+        if self._last_apply == target:
+            self._last_apply = ""
+        if failed:
+            return {"ok": removed > 0, "message": "%d elements retires, %d a retirer avec Cmd/Ctrl+Z" % (removed, failed)}
+        return {"ok": True, "message": "Envoi annule : %d elements retires" % removed}
+
+    # ------------------------------------------------------------------ legacy v2: new tracks with generated parts
     def _find_browser_item(self, root, names, depth=2, budget=None):
         if budget is None:
             budget = [600]
@@ -194,7 +692,6 @@ class FinishBridge(object):
         return None
 
     def _load_instrument(self, track, lane):
-        # Live 12.3+: Track.insert_device loads a native instrument directly (no browser search).
         if lane != "DRUMS" and hasattr(track, "insert_device"):
             for name in INSTRUMENTS.get(lane, ["Drift", "Operator"]):
                 try:
@@ -219,7 +716,6 @@ class FinishBridge(object):
             self._log("instrument load failed: %s" % e)
             return None
 
-    # ------------------------------------------------------------------ build
     def _build(self, req):
         song = self.song()
         warnings = []
@@ -232,7 +728,6 @@ class FinishBridge(object):
         if not tracks_spec:
             return {"ok": False, "error": "Rien a envoyer."}
 
-        # Arrangement placement needs Track.create_midi_clip (Live 12); otherwise new Session scenes.
         probe_mode = req.get("mode", "auto")
         created = []
         mode = None
@@ -260,7 +755,6 @@ class FinishBridge(object):
                 can_arrange = hasattr(track, "create_midi_clip") if kind != "audio" else hasattr(track, "create_audio_clip")
                 mode = "arrangement" if (probe_mode != "session" and can_arrange) else "session"
                 if mode == "session":
-                    # One new scene per section, named after it, appended after the user's scenes.
                     for sec in req.get("sections", []):
                         song.create_scene(-1)
                         si = len(song.scenes) - 1
@@ -315,5 +809,5 @@ class FinishBridge(object):
             else "dans de nouvelles scenes de la vue Session"
         message = "%d pistes, %d clips crees %s." % (len(created), clips_made, where)
         self._log(message)
-        return {"ok": True, "id": req.get("id", ""), "mode": mode, "tracks": created, "clips": clips_made,
+        return {"ok": True, "mode": mode, "tracks": created, "clips": clips_made,
                 "instruments": instruments, "warnings": warnings, "message": message, "live": self._live_version()}

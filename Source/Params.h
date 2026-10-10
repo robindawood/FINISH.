@@ -15,19 +15,28 @@ namespace ParamIDs
     inline constexpr const char* coherence = "coherence";
     inline constexpr const char* target   = "target";
     inline constexpr const char* ceiling  = "ceiling";
+    inline constexpr const char* masterProfile = "masterProfile";
+    inline constexpr const char* masterIntensity = "masterIntensity";
 
     inline constexpr int version = 1;
 }
 
-// Loudness targets (integrated LUFS). Index 0 = manual (DRIVE knob).
+// Loudness targets (integrated LUFS). Index 0 = manual (DRIVE knob). The last one keeps the mix's own loudness
+// (corrections only, never louder).
 struct LoudnessTarget { const char* name; const char* shortName; float lufs; };
 inline constexpr LoudnessTarget loudnessTargets[] = {
     { "Manual",          "MANUAL",  0.0f },
     { "Streaming -14",   "STREAM",  -14.0f },
     { "Balanced -11",    "BALANCED", -11.0f },
     { "Club -9",         "CLUB",    -9.0f },
-    { "Loud -7",         "LOUD",    -7.0f } };
-inline constexpr int numLoudnessTargets = 5;
+    { "Loud -7",         "LOUD",    -7.0f },
+    { "Same level",      "SAME",    0.0f } };
+inline constexpr int numLoudnessTargets = 6;
+inline constexpr int sameLevelTarget = 5;
+
+// Mastering character (what the corrections favour).
+inline constexpr const char* masterProfileNames[] = { "Auto", "Punch", "Warm", "Open" };
+inline constexpr int numMasterProfiles = 4;
 
 // Neutral values: with these, FINISH is transparent (except the -1 dBFS safety ceiling).
 struct MacroSettings
@@ -93,6 +102,13 @@ inline juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout
         ParameterID { ParamIDs::ceiling, ParamIDs::version }, "Ceiling", NormalisableRange<float> (-3.0f, -0.1f, 0.1f), -1.0f,
         AudioParameterFloatAttributes().withLabel ("dBTP")
             .withStringFromValueFunction ([] (float v, int) { return String (v, 1) + " dBTP"; })));
+
+    {
+        StringArray names;
+        for (auto* n : masterProfileNames) names.add (n);
+        layout.add (std::make_unique<AudioParameterChoice> (ParameterID { ParamIDs::masterProfile, ParamIDs::version }, "Master Profile", names, 0));
+    }
+    addFloat (ParamIDs::masterIntensity, "Master Intensity", 0.7f, percent, parsePercent);
 
     layout.add (std::make_unique<AudioParameterBool> (ParameterID { ParamIDs::bypass, ParamIDs::version }, "Bypass", false));
     layout.add (std::make_unique<AudioParameterBool> (ParameterID { ParamIDs::match,  ParamIDs::version }, "A/B Level Match", true));   // only affects the original while A/B bypassing

@@ -7,6 +7,7 @@
 #include "UI/Panels.h"
 #include "UI/ComposeViews.h"
 #include "UI/MasterViews.h"
+#include "UI/ProjectViews.h"
 
 // Big round illuminated key (FINISH MY TRACK).
 class ArcadeButton : public juce::Button
@@ -45,7 +46,8 @@ public:
     void resized() override;
 
     static constexpr int baseWidth = 1200, baseHeight = 800;
-    enum Page { compose = 0, sections = 1, master = 2 };
+    enum Page { projectPage = 0, compose = 1, sections = 2, master = 3 };
+    static constexpr int numPages = 4;
 
     struct Content : public juce::Component
     {
@@ -63,6 +65,7 @@ public:
     CommandStrip& getCommandStrip() noexcept { return command; }
     ArrangementView& getArrangementView() noexcept { return arrangement; }
     ComposeConsole& getComposeConsole() noexcept { return composeConsole; }
+    MasterView& getMasterView() noexcept { return masterView; }
     void selectArrangementSection (int s);
 
 private:
@@ -75,10 +78,10 @@ private:
     FINISHAudioProcessor& proc;
     NightLookAndFeel lnf;
     Content content { *this };
-    int page = compose;
+    int page = projectPage;
 
     ArcadeButton finishButton;
-    std::array<juce::TextButton, 3> tabs;
+    std::array<juce::TextButton, numPages> tabs;
     juce::TextButton refButton { "REFERENCE" }, refClear { "X" };
     juce::TextButton matchButton { "MATCH" }, bypassButton { "A/B" };
     CommandStrip command;
@@ -91,6 +94,11 @@ private:
     ArrangementView arrangement;
     ComposeColumn composeColumn;
     ComposeConsole composeConsole;
+    // PROJECT page (the user's Live set)
+    ProjectView projectView;
+    ProjectColumn projectColumn;
+    ProjectConsole projectConsole;
+    int lastAnswerVersion = -1, lastProjectVersion = -1;
     // MASTER page
     MasterView masterView;
     MasterColumn masterColumn;

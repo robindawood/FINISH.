@@ -46,6 +46,7 @@ AudioFeatures AnalysisSession::computeFeatures (const std::vector<AnalysisFrame>
     const float ungated = toLufs (sumP / sumW);
 
     double gP = 0, gW = 0, mid = 0, side = 0, low = 0, high = 0, lowSide = 0, highSide = 0, l = 0, r = 0, lr = 0;
+    double sub = 0, lowMid = 0, pres = 0, clips = 0;
     double dur = 0;
     std::vector<float> onsets;
     float peak = 0;
@@ -53,10 +54,12 @@ AudioFeatures AnalysisSession::computeFeatures (const std::vector<AnalysisFrame>
     {
         dur += fr.seconds;
         peak = std::max (peak, fr.peak);
+        clips += fr.clips;
         if (fr.lufs() <= ungated - 10.0f) continue;
         gP += fr.kPower * fr.seconds; gW += fr.seconds;
         mid += fr.midPow; side += fr.sidePow; low += fr.lowPow; high += fr.highPow; lowSide += fr.lowSidePow; highSide += fr.highSidePow;
         l += fr.lPow; r += fr.rPow; lr += fr.lrCross;
+        sub += fr.subPow; lowMid += fr.lowMidPow; pres += fr.presPow;
         onsets.push_back (fr.onsetDb);
     }
 
@@ -71,6 +74,13 @@ AudioFeatures AnalysisSession::computeFeatures (const std::vector<AnalysisFrame>
     f.sideRatio = (mid + side) > 0 ? (float) (side / (mid + side)) : 0.0f;
     f.lowSideRatio = (low + lowSide) > 0 ? (float) (lowSide / (low + lowSide)) : 0.0f;
     f.correlation = (l > 0 && r > 0) ? (float) (lr / std::sqrt (l * r)) : 1.0f;
+    f.subRatio = mid > 0 ? (float) (sub / mid) : 0.0f;
+    // Mid-range bands are measured against the energy above 150 Hz, so a big low end does not hide them.
+    const double upper = std::max (1.0e-12, mid - low);
+    f.lowMidRatio = mid > 0 ? (float) (lowMid / upper) : 0.0f;
+    f.presenceRatio = mid > 0 ? (float) (pres / upper) : 0.0f;
+    f.clipsPerMinute = dur > 0 ? (float) (clips / (dur / 60.0)) : 0.0f;
+    f.monoLossDb = mid > 0 ? (float) (10.0 * std::log10 (std::max (1.0e-12, 0.5 * (l + r)) / mid)) : 0.0f;
     // Punch = strength of the real hits: mean of the strongest 30 % of frame onsets.
     if (! onsets.empty())
     {

@@ -4,7 +4,7 @@ name: Build FINISH
 #   macOS   : FINISH-<version>-macOS.pkg        (VST3 + AU, Apple Silicon + Intel)
 #   Windows : FINISH-<version>-Windows-Setup.exe (VST3, 64-bit)
 # plus plain zips, after running the offline tests and pluginval.
-# Download them from the "Artifacts" section of the run, or from the Release created when you push a tag (v2.0.0).
+# Download them from the "Artifacts" section of the run, or from the Release created when you push a tag (v3.0.0).
 
 on:
   push:
@@ -14,7 +14,7 @@ on:
   workflow_dispatch:
 
 env:
-  VERSION: 2.0.0
+  VERSION: 3.0.0
 
 jobs:
   build:
@@ -63,7 +63,17 @@ jobs:
 
       - name: Test the Ableton Live bridge script (mock Live API)
         if: runner.os == 'macOS'
-        run: python3 Tests/test_live_bridge.py live_request_test.json
+        run: python3 Tests/test_live_bridge.py live_request_test.json build/test_out/plan_request_improve.json
+
+      - name: End to end - plugin <-> Remote Script on a mock Live (read, plan, write, undo)
+        if: runner.os == 'macOS'
+        run: |
+          python3 Tests/live_mock_server.py "$HOME" 120 > mocklive.log 2>&1 &
+          sleep 2
+          FINISH_E2E_HOME="$HOME" build/FinishTests_artefacts/Release/FinishTests --project
+          sleep 2
+          cat mocklive.log
+          python3 -c "import json,os; h=os.environ['HOME']; a=json.load(open(h+'/initial_state.json')); b=json.load(open(h+'/final_state.json')); assert a==b, 'set not restored after undo'; print('set restored after undo')"
 
       - name: Ad-hoc sign (macOS)
         if: runner.os == 'macOS'

@@ -12,6 +12,7 @@
 
 int failures = 0, checks = 0;
 void runComposeTests();
+void runProjectTests();
 #define CHECK(cond, msg) do { ++checks; if (! (cond)) { ++failures; std::cout << "  FAIL: " << msg << "  (" #cond ")\n"; } } while (0)
 
 // --------------------------------------------------------------------------------------
@@ -711,6 +712,161 @@ static void analyseTimed (FINISHAudioProcessor& p, TestPlayHead& ph, const juce:
 
 juce::AudioBuffer<float> renderReferenceDropForTests (double sr, double& bpm);
 
+// A "mix" with known problems: pink-ish noise + a strong 300 Hz build-up + harsh 3 kHz, bass in stereo.
+static juce::AudioBuffer<float> makeProblemMix (double sr, double seconds, float gain)
+{
+    juce::AudioBuffer<float> b (2, (int) (sr * seconds));
+    juce::Random rnd (7);
+    Biquad mud, harsh, tilt, tilt2, lowSide;
+    mud.setPeak (sr, 300.0, 0.9, 16.0);
+    harsh.setPeak (sr, 3200.0, 1.0, 7.0);
+    tilt.setLowShelf (sr, 200.0, 9.0);
+    tilt2.setHighShelf (sr, 6000.0, -6.0);
+    lowSide.setLowPass (sr, 100.0, 0.7071);
+    float b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, b5 = 0, b6 = 0;   // Kellet pink noise
+    for (int i = 0; i < b.getNumSamples(); ++i)
+    {
+        const float w = rnd.nextFloat() * 2.0f - 1.0f;
+        b0 = 0.99886f * b0 + w * 0.0555179f; b1 = 0.99332f * b1 + w * 0.0750759f; b2 = 0.96900f * b2 + w * 0.1538520f;
+        b3 = 0.86650f * b3 + w * 0.3104856f; b4 = 0.55000f * b4 + w * 0.5329522f; b5 = -0.7616f * b5 - w * 0.0168980f;
+        const float n = (b0 + b1 + b2 + b3 + b4 + b5 + b6 + w * 0.5362f) * 0.2f;
+        b6 = w * 0.115926f;
+        const float x = tilt2.process (tilt.process (harsh.process (mud.process (n, 0), 0), 0), 0) * gain;
+        // kick-like thump every half second for transients
+        const double t = (double) i / sr;
+        const double ph = std::fmod (t, 0.5);
+        const float kick = (float) (std::sin (2.0 * juce::MathConstants<double>::pi * 55.0 * ph) * std::exp (-ph * 18.0)) * gain * 3.0f;
+        const float side = lowSide.process (rnd.nextFloat() * 2.0f - 1.0f, 1) * gain * 12.0f;
+        b.setSample (0, i, x + kick + side);
+        b.setSample (1, i, x + kick - side);
+    }
+    return b;
+}
+
+static void testMasterDoctor()
+{
+    std::cout << "Mastering from the mix's problems\n";
+    // Pure logic
+    {
+        AudioFeatures f;
+        f.valid = true; f.durationSec = 60; f.integratedLufs = -9.5f; f.loudnessRange = 6; f.peakDb = -0.5f; f.plr = 9.0f;
+        f.lowRatio = 0.55f; f.highRatio = 0.05f; f.sideRatio = 0.12f; f.lowSideRatio = 0.05f; f.correlation = 0.7f; f.punchIndex = 7.0f;
+        f.subRatio = 0.2f; f.lowMidRatio = 0.32f; f.presenceRatio = 0.10f; f.monoLossDb = 2.0f; f.lowSideRatio = 0.02f;
+        MasterDoctor::Request r; r.in = f; r.bpm = 126.0; r.targetIndex = sameLevelTarget; r.intensity = 1.0f;
+        auto plan = MasterDoctor::design (r);
+        CHECK (plan.valid && plan.findings.empty(), "a balanced mix: nothing to fix (" + juce::String ((int) plan.findings.size()) + ")");
+        CHECK (std::abs (plan.eqLowDb) + std::abs (plan.eqHighDb) + std::abs (plan.eqMudDb) + std::abs (plan.eqPresDb) + std::abs (plan.sideDb) < 1.0e-6f, "no EQ on a balanced mix");
+        CHECK (plan.recommendedTarget == sameLevelTarget, "a mix already at -9.5 LUFS is not made louder");
+        f.lowMidRatio = 0.60f; f.highRatio = 0.006f;
+        r.in = f;
+        plan = MasterDoctor::design (r);
+        CHECK (plan.eqMudDb < -0.5f, "mud is cut");
+        CHECK (plan.eqHighDb > 0.4f, "dull top is opened");
+        r.keepDark = true;
+        plan = MasterDoctor::design (r);
+        CHECK (plan.eqHighDb <= 0.0f && plan.eqPresDb <= 0.0f, "keep dark: no added highs");
+        r.keepDark = false; r.intensity = 0.0f;
+        plan = MasterDoctor::design (r);
+        CHECK (std::abs (plan.eqMudDb) < 1.0e-6f, "intensity 0 = no correction");
+        f.integratedLufs = -19.0f; r.in = f; r.intensity = 0.7f;
+        plan = MasterDoctor::design (r);
+        CHECK (plan.recommendedTarget == 2, "a quiet club mix is brought to -11 LUFS, not further");
+        f.monoLossDb = 6.0f; f.correlation = 0.05f; r.in = f;
+        plan = MasterDoctor::design (r);
+        CHECK (plan.sideDb < -0.5f, "phase problems: the sides are reduced");
+        f.plr = 6.0f; f.loudnessRange = 2.0f; f.integratedLufs = -16.0f; r.in = f;
+        plan = MasterDoctor::design (r);
+        CHECK (plan.recommendedTarget == sameLevelTarget && plan.clip < 0.05f, "squashed mix: no push, almost no clipping");
+    }
+    // Debug: which stage changes the balance
+    if (juce::SystemStats::getEnvironmentVariable ("FINISH_DEBUG_MASTER", {}).isNotEmpty())
+    {
+        const double sr = 48000.0;
+        const auto mix = makeProblemMix (sr, 20.0, 0.05f);
+        auto measure = [&] (const juce::AudioBuffer<float>& b)
+        {
+            AudioAnalyzer an; an.setPublishSamples (false); an.prepare (sr);
+            AnalysisSession ses; std::vector<AnalysisFrame> tmp (512);
+            for (int pos = 0; pos < b.getNumSamples(); pos += 4096)
+            {
+                const int len = std::min (4096, b.getNumSamples() - pos);
+                an.process (b.getReadPointer (0, pos), b.getReadPointer (1, pos), len, pos / sr);
+                for (int got; (got = an.readFrames (tmp.data(), 512)) > 0;) for (int i = 0; i < got; ++i) ses.add (tmp[(size_t) i]);
+            }
+            return ses.computeFeatures();
+        };
+        auto run = [&] (const char* name, std::function<void (FinishDSP::Settings&)> set)
+        {
+            FinishDSP d; d.prepare (sr, 512, 2);
+            juce::AudioBuffer<float> b (mix);
+            FinishDSP::Settings st; set (st);
+            for (int pos = 0; pos < b.getNumSamples(); pos += 512)
+            {
+                juce::AudioBuffer<float> blk (b.getArrayOfWritePointers(), 2, pos, std::min (512, b.getNumSamples() - pos));
+                d.process (blk, st);
+            }
+            const auto f = measure (b);
+            std::cout << "  " << juce::String (name).paddedRight (' ', 14) << " lowmid " << f.lowMidRatio << " pres " << f.presenceRatio << " high " << f.highRatio << " low " << f.lowRatio << " lufs " << f.integratedLufs << " lowSide " << f.lowSideRatio << " side " << f.sideRatio << "\n";
+        };
+        const auto f0 = measure (mix);
+        std::cout << "  input          lowmid " << f0.lowMidRatio << " pres " << f0.presenceRatio << " high " << f0.highRatio << " low " << f0.lowRatio << "\n";
+        run ("neutral", [] (auto&) {});
+        run ("mud -1.2", [] (auto& s) { s.eqMudDb = -1.2f; });
+        run ("drive 13", [] (auto& s) { s.driveDb = 13.0f; });
+        run ("glue .5", [] (auto& s) { s.glue = 0.5f; });
+        run ("glue+drive", [] (auto& s) { s.glue = 0.5f; s.driveDb = 13.0f; });
+        run ("clip .4+drive", [] (auto& s) { s.clip = 0.4f; s.driveDb = 13.0f; });
+        run ("mono", [] (auto& s) { s.monoBass = 1.0f; });
+        run ("side -3", [] (auto& s) { s.sideDb = -3.0f; });
+    }
+    // Through the plugin: measure, correct, measure again (same passage), loudness kept.
+    {
+        const double sr = 48000.0;
+        FINISHAudioProcessor p;
+        p.setPlayConfigDetails (2, 2, sr, 512);
+        p.prepareToPlay (sr, 512);
+        TestPlayHead ph; ph.bpm = 126.0;
+        p.setPlayHead (&ph);
+        const auto mix = makeProblemMix (sr, 30.0, 0.05f);
+        feedTimed (p, ph, mix, sr, 10.0, 512, true);
+        p.applyRecommendedTarget();
+        const auto& plan = p.getMasterPlan();
+        const auto in = p.getMasterInput();
+        std::cout << "  in: " << in.integratedLufs << " LUFS, low-mid " << in.lowMidRatio << ", presence " << in.presenceRatio << ", lowSide " << in.lowSideRatio
+                  << " -> mud " << plan.eqMudDb << " pres " << plan.eqPresDb << " low " << plan.eqLowDb << " high " << plan.eqHighDb << " mono " << plan.monoBass
+                  << " target " << plan.recommendedTarget << "\n";
+        CHECK (in.valid && plan.valid, "mix measured while playing");
+        CHECK (plan.eqMudDb < -0.5f, "plugin: mud detected and cut");
+        CHECK (plan.monoBass > 0.5f, "plugin: stereo bass detected");
+        // Play the same passage again with the corrections on (60 s window holds both passes; restart it)
+        FINISHAudioProcessor q;
+        q.setPlayConfigDetails (2, 2, sr, 512);
+        q.prepareToPlay (sr, 512);
+        q.setPlayHead (&ph);
+        feedTimed (q, ph, mix, sr, 10.0, 512, true);
+        q.applyRecommendedTarget();
+        feedTimed (q, ph, mix, sr, 40.0, 512, true);
+        juce::MessageManager::getInstance()->runDispatchLoopUntil (2200);
+        juce::AudioBuffer<float> outBuf;
+        feedTimed (q, ph, mix, sr, 70.0, 512, true, &outBuf);
+        juce::MessageManager::getInstance()->runDispatchLoopUntil (2200);
+        std::cout << "  debug: in peak " << juce::Decibels::gainToDecibels (mix.getMagnitude (0, mix.getNumSamples()))
+                  << " out peak " << juce::Decibels::gainToDecibels (outBuf.getMagnitude (0, outBuf.getNumSamples()))
+                  << " drive " << q.getAutoDriveDb() << " corr " << q.getDSP().getLoudnessCorrectionDb() << " tp meter " << q.getDSP().getTruePeakDb() << "\n";
+        const auto& qin = q.getMasterInput();
+        const auto& qout = q.getMasterOutput();
+        std::cout << "  out: " << qout.integratedLufs << " LUFS (in " << qin.integratedLufs << "), low-mid " << qout.lowMidRatio << " (in " << qin.lowMidRatio
+                  << "), lowSide " << qout.lowSideRatio << " (in " << qin.lowSideRatio << ")\n";
+        CHECK (qout.valid && qout.lowMidRatio < qin.lowMidRatio * 0.97f, "low-mid build-up reduced at the output");
+        CHECK (qout.lowSideRatio < qin.lowSideRatio * 0.5f, "bass made mono at the output");
+        if ((int) q.params.getRawParameterValue (ParamIDs::target)->load() == sameLevelTarget)
+            CHECK (std::abs (qout.integratedLufs - qin.integratedLufs) < 1.2f, "same level target keeps the loudness");
+        const auto rep = q.getMasterReport();
+        CHECK (rep.contains (utf8 ("AVANT -> APRÈS")), "report has a before / after table");
+        std::cout << rep << "\n";
+    }
+}
+
 static void testFinishEndToEnd()
 {
     std::cout << "FINISH MY TRACK end to end: play a drop in the DAW, one click, arrangement + master + preview + export\n";
@@ -737,7 +893,10 @@ static void testFinishEndToEnd()
     CHECK (dna.keyRoot == 9 && dna.minor, "end-to-end key should be A minor");
     CHECK (std::abs (dna.bpm - bpm) < 0.01, "end-to-end tempo from host");
     CHECK (p.getComposer().getUserBar() == 16, "drop position in the set should be bar 17, got " + juce::String (p.getComposer().getUserBar() + 1));
-    CHECK ((int) p.params.getRawParameterValue (ParamIDs::target)->load() == 2, "master target should switch to BALANCED");
+    {
+        const int t = (int) p.params.getRawParameterValue (ParamIDs::target)->load();
+        CHECK (t > 0 && t == p.getMasterPlan().recommendedTarget, "master switched on with the target the analysis recommends (got " + juce::String (t) + ")");
+    }
 
     // Preview: the generated intro is audible through the plugin, even with the transport stopped.
     p.previewSection (0, true);
@@ -1027,7 +1186,29 @@ static void snapshot (const juce::File& base)
         for (int k = 0; k < 4; ++k) { feedTimed (q, ph2, drop, o.sr, 64.0 * 60.0 / bpm, 512, true); }
         pump (150);
         writePng (*e2, file ("master"));
+        e2->getMasterView().showReport (true);
+        pump (100);
+        writePng (*e2, file ("master_report"));
         ed2.reset();
+    }
+
+    // PROJECT page: the demo Live set as read by the Remote Script
+    {
+        FINISHAudioProcessor q;
+        q.prepareToPlay (o.sr, 512);
+        std::unique_ptr<juce::AudioProcessorEditor> ed3 (q.createEditorIfNeeded());
+        auto* e3 = dynamic_cast<FINISHAudioProcessorEditor*> (ed3.get());
+        if (e3 == nullptr) return;
+        pump (100);
+        writePng (*e3, file ("project_connect"));
+        q.showProject (LiveProject::fromFile (juce::File (FINISH_SOURCE_DIR).getChildFile ("Tests/fixtures/project_demo.json")));
+        pump (150);
+        writePng (*e3, file ("project"));
+        q.setIntent (utf8 ("termine mon morceau sans toucher à ma mélodie principale"));
+        q.editProject ([] (ProjectSession& s) { s.setLevel (Level::Improve); });
+        pump (150);
+        writePng (*e3, file ("project_improve"));
+        ed3.reset();
     }
 }
 
@@ -1036,6 +1217,19 @@ int main (int argc, char** argv)
     juce::ScopedJuceInitialiser_GUI gui;
 
     const bool composeOnly = argc > 1 && juce::String (argv[1]) == "--compose";
+    const bool projectOnly = argc > 1 && juce::String (argv[1]) == "--project";
+    if (argc > 1 && juce::String (argv[1]) == "--master")
+    {
+        testMasterDoctor();
+        std::cout << "\n" << (checks - failures) << "/" << checks << " checks passed\n";
+        return failures == 0 ? 0 : 1;
+    }
+    runProjectTests();
+    if (projectOnly)
+    {
+        std::cout << "\n" << (checks - failures) << "/" << checks << " checks passed\n";
+        return failures == 0 ? 0 : 1;
+    }
     runComposeTests();
     if (composeOnly)
     {
@@ -1055,6 +1249,7 @@ int main (int argc, char** argv)
     testProcessorAndState();
     testTrackEngine();
     testFinishEndToEnd();
+    testMasterDoctor();
 
     for (int i = 1; i + 1 < argc; ++i)
         if (juce::String (argv[i]) == "--snapshot")

@@ -17,8 +17,11 @@ void FinishDSP::prepare (double sampleRate, int maxBlockSize, int numChannels)
         s->reset (sr, 0.05);
     for (auto* s : { &sHp, &sLp, &sGate, &sEcho, &sSpace })
         s->reset (sr, 0.08);
-    for (auto* s : { &sEqLow, &sEqHigh, &sGlue, &sClip })
+    for (auto* s : { &sEqLow, &sEqHigh, &sGlue, &sClip, &sEqMud, &sEqPres, &sSide, &sMono })
         s->reset (sr, 0.3);
+    sLevOn.reset (sr, 0.05);
+    msSideLoA.setHighPass (sr, 160.0, 0.7071);   // (high-passes the sides: mono bass)
+    msSideLoB.setHighPass (sr, 160.0, 0.7071);
     sBypass.reset (sr, 0.02);
     sDry.reset (sr, 0.03);
     sTrim.reset (sr, 0.03);
@@ -108,7 +111,8 @@ void FinishDSP::prepare (double sampleRate, int maxBlockSize, int numChannels)
     sBypass.setCurrentAndTargetValue (0.0f);
     sDry.setCurrentAndTargetValue (0.0f);
     sTrim.setCurrentAndTargetValue (1.0f);
-    for (auto* s : { &sEqLow, &sEqHigh, &sGlue, &sClip }) s->setCurrentAndTargetValue (0.0f);
+    for (auto* s : { &sEqLow, &sEqHigh, &sGlue, &sClip, &sEqMud, &sEqPres, &sSide, &sMono, &sLevOn }) s->setCurrentAndTargetValue (0.0f);
+    lastPunchKeep = -1.0f;
     reset();
 }
 
@@ -120,6 +124,8 @@ void FinishDSP::reset()
     hpf.reset(); lpf.reset();
     hpf.set (sr, 20.0, 0.9f); lpf.set (sr, sr * 0.45, 0.9f);
     gateEnv = 1.0f; freePhase = 0;
+    for (auto* b : { &mEqMud, &mEqPres, &msSideLoA, &msSideLoB }) b->reset();
+    lastEqMud = lastEqPres = 1000.0f;
     for (auto* b : { &mEqLow, &mEqHigh, &nyqA, &nyqB, &xLow1a, &xLow1b, &xHigh1a, &xHigh1b, &xLow2a, &xLow2b, &xHigh2a, &xHigh2b, &apLowA, &apLowB, &apHighA, &apHighB })
         b->reset();
     for (int k = 0; k < 3; ++k) { bandEnv[k] = bandRms[k] = bandGr[k] = 0.0f; }
@@ -201,6 +207,16 @@ void FinishDSP::process (juce::AudioBuffer<float>& buffer, const Settings& s) no
     sEqHigh.setTargetValue (juce::jlimit (-4.0f, 4.0f, s.eqHighDb));
     sGlue.setTargetValue (juce::jlimit (0.0f, 1.0f, s.glue));
     sClip.setTargetValue (juce::jlimit (0.0f, 1.0f, s.clip));
+    sEqMud.setTargetValue (juce::jlimit (-4.0f, 2.0f, s.eqMudDb));
+    sEqPres.setTargetValue (juce::jlimit (-4.0f, 2.0f, s.eqPresDb));
+    sSide.setTargetValue (juce::jlimit (-6.0f, 3.0f, s.sideDb));
+    sMono.setTargetValue (juce::jlimit (0.0f, 1.0f, s.monoBass));
+    sLevOn.setTargetValue (s.glue > 1.0e-3f ? 1.0f : 0.0f);
+    if (std::abs (s.punchKeep - lastPunchKeep) > 0.01f)
+    {
+        lastPunchKeep = s.punchKeep;
+        bandAtt = envCoeff (sr, 0.015 + 0.025 * juce::jlimit (0.0f, 1.0f, s.punchKeep));   // slower attack: transients pass
+    }
 
     float* L = buffer.getWritePointer (0);
     float* R = nc > 1 ? buffer.getWritePointer (1) : nullptr;
@@ -386,11 +402,37 @@ void FinishDSP::processChunk (float* L, float* R, int n, const Settings& s, doub
             l = mEqHigh.process (mEqLow.process (l, 0), 0);
             r = stereo ? mEqHigh.process (mEqLow.process (r, 1), 1) : l;
         }
+        // ---- Mastering: corrective bells (low-mid build-up, presence)
+        {
+            const float mud = sEqMud.getNextValue(), pres = sEqPres.getNextValue();
+            if (eqCounter == 0)
+            {
+                if (std::abs (mud - lastEqMud) > 0.01f) { mEqMud.setPeak (sr, 300.0, 0.9, mud); lastEqMud = mud; }
+                if (std::abs (pres - lastEqPres) > 0.01f) { mEqPres.setPeak (sr, 3200.0, 1.0, pres); lastEqPres = pres; }
+            }
+            if (std::abs (lastEqMud) > 0.01f || std::abs (lastEqPres) > 0.01f)
+            {
+                l = mEqPres.process (mEqMud.process (l, 0), 0);
+                r = stereo ? mEqPres.process (mEqMud.process (r, 1), 1) : l;
+            }
+        }
+        // ---- Mastering: width (sides above 120 Hz) and mono bass (sides below)
+        {
+            const float sideDb = sSide.getNextValue(), mono = sMono.getNextValue();
+            const float sideHp = msSideLoB.process (msSideLoA.process (0.5f * (l - r), 0), 0);   // always run: no state jump
+            if (stereo && (std::abs (sideDb) > 0.01f || mono > 0.001f))
+            {
+                const float m = 0.5f * (l + r), sd = 0.5f * (l - r);
+                const float ns = dbToGain (sideDb) * (sd + mono * (sideHp - sd));
+                l = m + ns; r = m - ns;
+            }
+        }
 
         // ---- Mastering: 3-band leveller. Each band's peaks are held near its own average (+3 dB crest),
         // so a loud kick or a harsh hat no longer drives the whole limiter.
         const float glue = sGlue.getNextValue();
-        if (glue > 1.0e-4f)
+        const float levOn = sLevOn.getNextValue();
+        if (levOn > 1.0e-4f)
         {
             float bl[3], br[3];
             for (int c = 0; c < (stereo ? 2 : 1); ++c)
@@ -408,18 +450,21 @@ void FinishDSP::processChunk (float* L, float* R, int n, const Settings& s, doub
             float yl = 0, yr = 0;
             for (int k = 0; k < 3; ++k)
             {
-                const float det = std::max (std::abs (bl[k]), std::abs (br[k]));
-                bandEnv[k] = det > bandEnv[k] ? bandAtt * bandEnv[k] + (1 - bandAtt) * det : bandRel * bandEnv[k] + (1 - bandRel) * det;
-                bandRms[k] = bandRmsCoef * bandRms[k] + (1 - bandRmsCoef) * det * det;
-                const float over = gainToDb (bandEnv[k]) - (10.0f * std::log10 (bandRms[k] + 1.0e-12f) + 3.0f);
+                // Level (not waveform) leveller: the band's short-term energy against its own long-term average.
+                // A noisy band (hats) is not turned down for its natural crest, only for real bursts.
+                const float e = 0.5f * (bl[k] * bl[k] + br[k] * br[k]);
+                bandEnv[k] = e > bandEnv[k] ? bandAtt * bandEnv[k] + (1 - bandAtt) * e : bandRel * bandEnv[k] + (1 - bandRel) * e;
+                bandRms[k] = bandRmsCoef * bandRms[k] + (1 - bandRmsCoef) * e;
+                const float over = 10.0f * std::log10 (bandEnv[k] + 1.0e-12f) - (10.0f * std::log10 (bandRms[k] + 1.0e-12f) + 3.0f);
                 const float want = over > 0 ? std::min (4.0f, 0.5f * over) * glue : 0.0f;
                 bandGr[k] = bandGrSmooth * bandGr[k] + (1 - bandGrSmooth) * want;
                 const float g = dbToGain (-bandGr[k]);
                 yl += bl[k] * g; yr += br[k] * g;
             }
-            // crossfade so switching the mastering on/off never clicks
-            l += glue * (yl - l);
-            r += glue * (yr - r);
+            // The band sum is an allpass version of the input: once on, the output is the band sum alone (blending it
+            // with the dry signal would comb-filter around the crossovers). The crossfade only covers switching on/off.
+            l += levOn * (yl - l);
+            r += levOn * (yr - r);
         }
 
         l *= trim * drive; r *= trim * drive;
@@ -537,4 +582,9 @@ void FinishDSP::processChunk (float* L, float* R, int n, const Settings& s, doub
     for (int k = 0; k < 3; ++k) bandGrOut[(size_t) k].store (bandGr[k]);
     peakHoldDb = std::max (peakHoldDb, gainToDb (blockTp));
     truePeakDb.store (std::max (truePeakDb.load(), peakHoldDb));
+    {
+        const float blockDb = gainToDb (blockTp);
+        float prev = maxPeakDb.load();
+        while (blockDb > prev && ! maxPeakDb.compare_exchange_weak (prev, blockDb)) {}
+    }
 }

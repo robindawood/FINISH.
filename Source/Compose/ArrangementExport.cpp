@@ -239,7 +239,7 @@ Result exportAll (const Arrangement& arr, const MusicalDNA& dna, const juce::Fil
 // ======================================================================================
 // Ableton Live bridge
 
-static juce::Array<juce::File> liveUserLibraries (bool createDefault)
+juce::Array<juce::File> liveUserLibraries (bool createDefault)
 {
     juce::Array<juce::File> libs;
     auto addIfDir = [&] (const juce::File& f) { if (f.isDirectory() && ! libs.contains (f)) libs.add (f); };

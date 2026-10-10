@@ -13,6 +13,9 @@
 #include "Compose/MusicCapture.h"
 #include "Compose/PreviewSynth.h"
 #include "Compose/Composer.h"
+#include "Project/ProjectSession.h"
+#include "Master/MasterDoctor.h"
+#include <deque>
 
 // Threading model
 //   audio thread  : analyzer + section plan evaluation (by host song position) + DSP. Atomics, lock-free FIFOs,
@@ -88,8 +91,39 @@ public:
     void setPreviewLaneMuted (Lane l, bool m) { preview.setLaneMuted (l, m); }
     bool isPreviewLaneMuted (Lane l) const noexcept { return preview.isLaneMuted (l); }
 
-    // Editor page (COMPOSE / SECTIONS / MASTER), kept while the editor is closed.
+    // Editor page (PROJECT / SKETCH / SECTIONS / MASTER), kept while the editor is closed.
     int uiPage = 0;
+
+    // ---- FINISH 3: the user's Ableton Live project (read, plan, write, undo) -----------------------
+    ProjectSession& getProject() noexcept { return project; }
+    const ProjectSession& getProject() const noexcept { return project; }
+    void readLiveProject();                       // FINISH button in project mode
+    void showProject (LiveProject p);             // a set read elsewhere (tests, screenshots)
+    void editProject (const std::function<void (ProjectSession&)>& change);
+    void sendProjectToLive();                     // after the user confirmed
+    void undoProjectSend();
+    void previewProject (int section, bool loop); // approximate preview of new sections (-1 = all)
+    int takePageRequest() { const int r = pageRequest; pageRequest = -1; return r; }
+    bool takeSendConfirmRequest() { const bool r = sendConfirmRequested; sendConfirmRequested = false; return r; }
+    const juce::String& getAnswer() const noexcept { return answerText; }   // last long answer (analysis, plan, report)
+    int getAnswerVersion() const noexcept { return answerVersion; }
+    bool isPreviewingProject() const noexcept { return previewSource == 1 && preview.isPlaying(); }
+
+    // ---- Mastering from the mix's problems
+    const MasterPlan& getMasterPlan() const noexcept { return masterPlan; }
+    juce::String getMasterReport() const;
+    const AudioFeatures& getMasterInput() const noexcept { return masterInFeatures; }
+    const AudioFeatures& getMasterOutput() const noexcept { return masterOutFeatures; }
+    float getTargetLufs() const noexcept;
+    void setMasterCharacter (bool keepDark, bool keepBright);
+    bool getKeepDark() const noexcept { return keepDark; }
+    float getAutoMud() const noexcept { return autoMud.load(); }
+    float getAutoPres() const noexcept { return autoPres.load(); }
+    float getAutoSide() const noexcept { return autoSide.load(); }
+    float getAutoMono() const noexcept { return autoMono.load(); }
+    float getAutoPunchKeep() const noexcept { return autoPunch.load(); }
+    double getMasterSeconds() const noexcept;
+    void applyRecommendedTarget();
 
     // Delivery
     ArrangementExport::Result exportArrangement (bool revealFolder = true);
@@ -172,6 +206,34 @@ private:
     SectionMacros layerSmoothed;
     float keepSmoothed = 0;
     std::atomic<float> liveImpact { 0 }, livePunch { 0 }, liveWidth { 0 }, liveWarmth { 0 }, liveLoud { 0 }, liveTrim { 0 };
+
+    // Mastering analysis: what comes in and what goes out, over the same last minute played.
+    AudioAnalyzer outAnalyzer;
+    std::deque<AnalysisFrame> masterInFrames, masterOutFrames;
+    AudioFeatures masterInFeatures, masterOutFeatures;
+    MasterPlan masterPlan;
+    float masterOutTpMax = -100.0f;
+    double lastMasterUpdate = 0.0;
+    int lastProfile = -1; float lastIntensity = -1.0f; int lastTargetForPlan = -1;
+    bool keepDark = false, keepBright = false;
+    std::atomic<float> autoMud { 0.0f }, autoPres { 0.0f }, autoSide { 0.0f }, autoMono { 0.0f }, autoGlue { 0.0f }, autoClip { 0.0f }, autoPunch { 0.0f };
+    std::atomic<float> sameLevelLufs { -14.0f };
+    std::atomic<float>* pProfile = nullptr; std::atomic<float>* pIntensity = nullptr;
+    void updateMaster (bool force);
+
+    // Project mode
+    ProjectSession project;
+    bool sendConfirmRequested = false;
+    int pageRequest = -1;
+    juce::String pendingProjectCommand;
+    std::deque<float> tpHistory;
+    std::atomic<bool> previewingNow { false };
+    juce::String answerText;
+    int answerVersion = 0;
+    int previewSource = 0;           // 0 = sketch arrangement, 1 = project plan
+    int projectPreviewVersion = -1;
+    void setAnswer (const juce::String& a) { answerText = a; ++answerVersion; }
+    bool handleProjectCommand (const juce::String& text);
 
     // Compose (audio thread: capture + preview)
     MusicCapture capture;
