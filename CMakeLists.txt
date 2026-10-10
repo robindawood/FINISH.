@@ -4,7 +4,12 @@ cmake_minimum_required(VERSION 3.22)
 set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64" CACHE STRING "macOS architectures")
 set(CMAKE_OSX_DEPLOYMENT_TARGET "10.13" CACHE STRING "Minimum macOS version")
 
-project(FINISH VERSION 1.2.0 LANGUAGES C CXX)
+project(FINISH VERSION 2.0.0 LANGUAGES C CXX)
+
+# Source files contain UTF-8 text (French UI strings).
+if(MSVC)
+    add_compile_options(/utf-8)
+endif()
 
 option(FINISH_COPY_AFTER_BUILD "Copy the plugin into the system plugin folder after building (needs admin rights on Windows)" OFF)
 option(FINISH_BUILD_TESTS "Build the offline test runner" OFF)
@@ -80,6 +85,8 @@ set(FINISH_SOURCES
     Source/UI/TrackMapView.cpp
     Source/UI/Inspector.cpp
     Source/UI/Panels.cpp
+    Source/UI/ComposeViews.cpp
+    Source/UI/MasterViews.cpp
     Source/Compose/MusicCapture.cpp
     Source/Compose/MusicAnalyzer.cpp
     Source/Compose/ArrangementGenerator.cpp

@@ -239,7 +239,7 @@ Result exportAll (const Arrangement& arr, const MusicalDNA& dna, const juce::Fil
 // ======================================================================================
 // Ableton Live bridge
 
-static juce::Array<juce::File> liveUserLibraries()
+static juce::Array<juce::File> liveUserLibraries (bool createDefault)
 {
     juce::Array<juce::File> libs;
     auto addIfDir = [&] (const juce::File& f) { if (f.isDirectory() && ! libs.contains (f)) libs.add (f); };
@@ -270,7 +270,7 @@ static juce::Array<juce::File> liveUserLibraries()
         }
     addIfDir (home.getChildFile ("Music/Ableton/User Library"));
     addIfDir (home.getChildFile ("Documents/Ableton/User Library"));
-    if (libs.isEmpty())   // Live never ran? create the default one so the script is there when it does.
+    if (libs.isEmpty() && createDefault)   // Live never ran? create the default one so the script is there when it does.
     {
        #if JUCE_WINDOWS
         libs.add (home.getChildFile ("Documents/Ableton/User Library"));
@@ -281,18 +281,22 @@ static juce::Array<juce::File> liveUserLibraries()
     return libs;
 }
 
-juce::Array<juce::File> installLiveScript (juce::String& report)
+juce::Array<juce::File> installLiveScript (juce::String& report, bool createLibraryIfMissing)
 {
     juce::Array<juce::File> written;
-    for (auto& lib : liveUserLibraries())
+    for (auto& lib : liveUserLibraries (createLibraryIfMissing))
     {
         const auto dir = lib.getChildFile ("Remote Scripts").getChildFile ("FINISH");
         if (! dir.createDirectory()) continue;
+        // Up to date already? (keeps file times stable so Live does not recompile for nothing)
+        if (dir.getChildFile ("finish_bridge.py").loadFileAsString() == juce::String::fromUTF8 (BinaryData::finish_bridge_py, BinaryData::finish_bridge_pySize)
+            && dir.getChildFile ("__init__.py").existsAsFile())
+        { written.add (dir); continue; }
         bool ok = dir.getChildFile ("__init__.py").replaceWithData (BinaryData::__init___py, (size_t) BinaryData::__init___pySize);
         ok = ok && dir.getChildFile ("finish_bridge.py").replaceWithData (BinaryData::finish_bridge_py, (size_t) BinaryData::finish_bridge_pySize);
         if (ok) written.add (dir);
     }
-    liveInbox().createDirectory();
+    if (! written.isEmpty()) liveInbox().createDirectory();
     report = written.isEmpty() ? utf8 ("Impossible d'installer le script Live.")
                                : utf8 ("Script Live installé : ") + written.getFirst().getFullPathName();
     return written;

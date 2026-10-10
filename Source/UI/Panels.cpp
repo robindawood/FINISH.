@@ -13,8 +13,8 @@ TrackPanel::TrackPanel (FINISHAudioProcessor& p) : proc (p)
     intentEditor.setTooltip (u8 ("Tell FINISH what you want, in English or French. Ex: \"plus large mais pas plus fort\", \"make the drop hit harder\"."));
     go.getProperties().set ("style", "chip");
     go.onClick = [this] { submit(); };
-    addAndMakeVisible (intentEditor);
-    addAndMakeVisible (go);
+    addChildComponent (intentEditor);   // requests go through the header strip
+    addChildComponent (go);
 }
 
 void TrackPanel::submit()
@@ -72,7 +72,7 @@ void TrackPanel::paint (juce::Graphics& g)
     drawScreenGlass (g, lcd, 6.0f, 0.5f);
 
     // Opportunities LCD
-    auto opp = juce::Rectangle<float> (8.0f, 216.0f, w - 16.0f, 62.0f);
+    auto opp = juce::Rectangle<float> (8.0f, 216.0f, w - 16.0f, 120.0f);
     drawScreen (g, opp, 6.0f, true);
     g.setColour (dusk);
     g.setFont (mono (7.5f));
@@ -92,7 +92,7 @@ void TrackPanel::paint (juce::Graphics& g)
         g.setFont (mono (9.5f));
         g.drawText ("NOTHING HOLDS IT BACK", juce::Rectangle<float> (opp.getX() + 24.0f, y, opp.getWidth() - 30.0f, 14.0f), juce::Justification::centredLeft);
     }
-    for (size_t i = 0; i < d.size() && i < 3; ++i)
+    for (size_t i = 0; i < d.size() && i < 7; ++i)
     {
         const auto col = d[i].severity > 0.66f ? rose : (d[i].severity > 0.33f ? amber : mist);
         drawLed (g, { opp.getX() + 15.0f, y + 7.0f }, 2.5f, col, true);
@@ -105,15 +105,6 @@ void TrackPanel::paint (juce::Graphics& g)
     }
     drawScreenGlass (g, opp, 6.0f, 0.5f);
 
-    // Intent
-    engraved (g, "INTENT  EN / FR", { 8.0f, 284.0f, 120.0f, 10.0f }, 6.5f, juce::Justification::centredLeft);
-    const auto& u = proc.getIntentUnderstood();
-    if (proc.getIntentText().isNotEmpty())
-    {
-        g.setColour (u.isEmpty() ? dusk : cyan);
-        g.setFont (mono (8.5f));
-        g.drawText (u.isEmpty() ? juce::String ("NOT UNDERSTOOD") : u.joinIntoString (" "), juce::Rectangle<float> (110.0f, 283.0f, w - 118.0f, 12.0f), juce::Justification::centredRight, true);
-    }
 }
 
 // ======================================================================================
@@ -125,7 +116,7 @@ ControlDeck::ControlDeck (FINISHAudioProcessor& p) : proc (p)
         { ParamIDs::impact,    "IMPACT",    "Glue compression: density and cohesion." },
         { ParamIDs::width,     "WIDTH",     "Stereo width. Above 100 % the bass below 140 Hz is folded to mono." },
         { ParamIDs::warmth,    "WARMTH",    "Tone tilt: right = warmer, left = brighter." },
-        { ParamIDs::loudness,  "LOUDNESS",  "Saturation and limiter drive. Peaks never exceed -1 dBFS." },
+        { ParamIDs::loudness,  "LOUDNESS",  "Saturation and limiter drive (when the MASTER target is MANUAL). Never above the true-peak ceiling." },
         { ParamIDs::coherence, "COHERENCE", "FINISH MY TRACK: pulls section edits towards one consistent sound. 0 % = every section on its own." } } };
     for (size_t i = 0; i < knobs.size(); ++i)
     {

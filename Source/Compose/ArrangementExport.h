@@ -30,7 +30,7 @@ namespace ArrangementExport
 
     // ---- Ableton Live bridge -------------------------------------------------------------
     // Installs/updates the Remote Script in every Live User Library found. Returns the folders written.
-    juce::Array<juce::File> installLiveScript (juce::String& report);
+    juce::Array<juce::File> installLiveScript (juce::String& report, bool createLibraryIfMissing = true);
     // Writes the request for the Remote Script. `startBar` = where the arrangement's bar 1 lands in the set.
     bool sendToLive (const Arrangement& arr, const MusicalDNA& dna, const Result& exported, int startBar,
                      bool loadInstruments, juce::String& requestId, juce::String& error);

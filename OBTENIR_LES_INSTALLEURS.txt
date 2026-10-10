@@ -10,7 +10,7 @@ Comptez environ 5 minutes de manipulations, puis environ 20 minutes d'attente.
    - Nom : FINISH. Cochez « Private ». Cliquez « Create repository ».
 
 2. ENVOYER LES FICHIERS
-   - Décompressez FINISH_V1.2.zip sur votre Mac.
+   - Décompressez FINISH_V2.zip sur votre Mac.
    - Ouvrez le dossier FINISH dans le Finder et appuyez sur Cmd + Maj + .  (point)
      pour afficher les fichiers cachés. Le dossier « .github » doit apparaître :
      il est indispensable, c'est lui qui contient la recette de fabrication.
@@ -25,11 +25,11 @@ Comptez environ 5 minutes de manipulations, puis environ 20 minutes d'attente.
 
 4. TÉLÉCHARGER
    - Cliquez sur ce travail, puis descendez jusqu'à « Artifacts ».
-   - FINISH-macOS   -> contient FINISH-1.2.0-macOS.pkg
-   - FINISH-Windows -> contient FINISH-1.2.0-Windows-Setup.exe
+   - FINISH-macOS   -> contient FINISH-2.0.0-macOS.pkg
+   - FINISH-Windows -> contient FINISH-2.0.0-Windows-Setup.exe
 
 5. INSTALLER SUR MAC
-   - Double-cliquez FINISH-1.2.0-macOS.pkg.
+   - Double-cliquez FINISH-2.0.0-macOS.pkg.
    - Si macOS dit « impossible de vérifier le développeur » : clic droit sur le .pkg,
      puis « Ouvrir », puis « Ouvrir » encore (ou Réglages Système > Confidentialité
      et sécurité > « Ouvrir quand même »).
@@ -38,7 +38,7 @@ Comptez environ 5 minutes de manipulations, puis environ 20 minutes d'attente.
      FL Studio : Options > Manage plugins > « Find more plugins ».
 
 6. INSTALLER SUR WINDOWS
-   - Double-cliquez FINISH-1.2.0-Windows-Setup.exe.
+   - Double-cliquez FINISH-2.0.0-Windows-Setup.exe.
    - Si Windows affiche « Windows a protégé votre ordinateur » : « Informations
      complémentaires », puis « Exécuter quand même ».
    - Relancez le scan des plugins dans FL Studio ou Ableton.

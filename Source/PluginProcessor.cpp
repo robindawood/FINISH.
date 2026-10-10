@@ -495,11 +495,11 @@ void FINISHAudioProcessor::stopPreview()
     previewSectionIndex = -1;
 }
 
-ArrangementExport::Result FINISHAudioProcessor::exportArrangement()
+ArrangementExport::Result FINISHAudioProcessor::exportArrangement (bool revealFolder)
 {
     auto r = composer.exportAll (currentSampleRate.load());
     statusMessage = r.ok ? utf8 ("Exporté : ") + r.folder.getFullPathName() : r.error;
-    if (r.ok) r.folder.revealToUser();
+    if (r.ok && revealFolder) r.folder.revealToUser();
     ++resultVersion;
     return r;
 }

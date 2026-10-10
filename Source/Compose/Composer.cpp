@@ -102,6 +102,19 @@ void Composer::regenerateSection (int index)
     touched();
 }
 
+void Composer::applyToSection (int index, const SectionMood& mood, int bars)
+{
+    auto& arr = proposals[(size_t) current];
+    if (index < 0 || index >= (int) arr.sections.size()) return;
+    pushUndo();
+    auto& s = arr.sections[(size_t) index];
+    s.locked = false;
+    merge (s.mood, mood);
+    if (bars > 0 && ! s.isReference) s.bars = bars;
+    ArrangementGenerator::buildSection (arr, index, dnaState, nextSeed (seedCounter));
+    touched();
+}
+
 void Composer::toggleLock (int index)
 {
     auto& arr = proposals[(size_t) current];

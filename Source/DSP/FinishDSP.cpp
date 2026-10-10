@@ -147,6 +147,7 @@ void FinishDSP::reset()
     pIn = pOut = pInShort = pOutShort = pOutMom = 0.0f;
     matchGain = 1.0f;
     corrDb = 0.0f;
+    peakHoldDb = -100.0f;
     lastWarmth = -1.0f;
     toneCounter = fxCounter = 0;
     updateToneFilters (sWarmth.getCurrentValue());
@@ -204,8 +205,11 @@ void FinishDSP::process (juce::AudioBuffer<float>& buffer, const Settings& s) no
     float* L = buffer.getWritePointer (0);
     float* R = nc > 1 ? buffer.getWritePointer (1) : nullptr;
 
+    // meters: peak with a falling hold (about 12 dB/s), gain reduction with fast release
+    const float fall = 12.0f * (float) n / (float) sr;
+    peakHoldDb = std::max (-100.0f, peakHoldDb - fall);
     grDb.store (0.0f);
-    truePeakDb.store (-100.0f);
+    truePeakDb.store (peakHoldDb);
     const double beatsPerSample = std::max (1.0, s.bpm) / 60.0 / sr;
     for (int pos = 0; pos < n; pos += maxBlock)
     {
@@ -531,5 +535,6 @@ void FinishDSP::processChunk (float* L, float* R, int n, const Settings& s, doub
     grDb.store (std::max (grDb.load(), blockGr));
     clipOut.store (gainToDb (blockClip));
     for (int k = 0; k < 3; ++k) bandGrOut[(size_t) k].store (bandGr[k]);
-    truePeakDb.store (std::max (truePeakDb.load(), gainToDb (blockTp)));
+    peakHoldDb = std::max (peakHoldDb, gainToDb (blockTp));
+    truePeakDb.store (std::max (truePeakDb.load(), peakHoldDb));
 }

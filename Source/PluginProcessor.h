@@ -88,8 +88,11 @@ public:
     void setPreviewLaneMuted (Lane l, bool m) { preview.setLaneMuted (l, m); }
     bool isPreviewLaneMuted (Lane l) const noexcept { return preview.isLaneMuted (l); }
 
+    // Editor page (COMPOSE / SECTIONS / MASTER), kept while the editor is closed.
+    int uiPage = 0;
+
     // Delivery
-    ArrangementExport::Result exportArrangement();
+    ArrangementExport::Result exportArrangement (bool revealFolder = true);
     void sendArrangementToLive();
     juce::File exportClipForDrag (int section, Lane lane);
 

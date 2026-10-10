@@ -11,8 +11,9 @@ void ArcadeButton::paintButton (juce::Graphics& g, bool highlighted, bool down)
     const float t = (float) (juce::Time::getMillisecondCounter() % 100000) / 1000.0f;
 
     // Outer halo
-    const auto haloCol = mode == Mode::Listening ? cyan : violet;
-    const float pulse = mode == Mode::Listening ? 0.6f + 0.4f * std::sin (t * 5.0f) : (highlighted ? 1.0f : 0.75f);
+    const bool busy = mode == Mode::Listening || mode == Mode::Working;
+    const auto haloCol = mode == Mode::Listening ? cyan : (mode == Mode::Working ? amber : violet);
+    const float pulse = busy ? 0.6f + 0.4f * std::sin (t * 5.0f) : (highlighted ? 1.0f : 0.75f);
     juce::ColourGradient halo (haloCol.withAlpha (0.28f * pulse), c.x, c.y, haloCol.withAlpha (0.0f), c.x + R * 1.25f, c.y, true);
     g.setGradientFill (halo);
     g.fillEllipse (juce::Rectangle<float> (R * 2.5f, R * 2.5f).withCentre (c));
@@ -34,12 +35,13 @@ void ArcadeButton::paintButton (juce::Graphics& g, bool highlighted, bool down)
     // Neon ring inside the dome
     const float ringR = domeR * 0.8f;
     const int segs = 64;
-    const float spin = mode == Mode::Listening ? t * 2.2f : 0.0f;
+    const float spin = busy ? t * (mode == Mode::Working ? 4.0f : 2.2f) : 0.0f;
     for (int i = 0; i < segs; ++i)
     {
         const float a0 = juce::MathConstants<float>::twoPi * (float) i / segs, a1 = a0 + juce::MathConstants<float>::twoPi / segs + 0.01f;
         const float u = std::fmod ((float) i / segs + spin / juce::MathConstants<float>::twoPi, 1.0f);
-        const auto col = mode == Mode::Listening ? cyan.withAlpha (0.25f + 0.75f * u) : auroraAt (std::abs (u * 2.0f - 1.0f));
+        const auto col = mode == Mode::Listening ? cyan.withAlpha (0.25f + 0.75f * u)
+                       : (mode == Mode::Working ? amber.withAlpha (0.25f + 0.75f * u) : auroraAt (std::abs (u * 2.0f - 1.0f)));
         juce::Path seg;
         seg.addCentredArc (dc.x, dc.y, ringR, ringR, 0, a0, a1, true);
         g.setColour (col.withMultipliedAlpha (0.22f * pulse));
@@ -62,32 +64,97 @@ void ArcadeButton::paintButton (juce::Graphics& g, bool highlighted, bool down)
         g.setFont (mono (13.0f));
         g.drawText (mmss (listenSeconds), txt.withTrimmedTop (txt.getHeight() * 0.55f), juce::Justification::centredTop);
     }
+    else if (mode == Mode::Working)
+    {
+        neonText (g, "FINISH", display (13.0f, 0.1f), txt.withTrimmedBottom (txt.getHeight() * 0.5f), amber, juce::Justification::centredBottom);
+        g.setColour (amber);
+        g.setFont (label (6.5f));
+        g.drawText (juce::String ("WRITING") + juce::String::repeatedString (".", 1 + (int) (t * 3.0f) % 3), txt.withTrimmedTop (txt.getHeight() * 0.55f), juce::Justification::centredTop);
+    }
     else
     {
         const auto col = mode == Mode::Ready ? cyan : violet;
         neonText (g, "FINISH", display (13.0f, 0.1f), txt.withTrimmedBottom (txt.getHeight() * 0.5f), col, juce::Justification::centredBottom);
         g.setColour (mist);
         g.setFont (label (6.5f));
-        g.drawText (mode == Mode::Ready ? "ANALYSE AGAIN" : "MY TRACK", txt.withTrimmedTop (txt.getHeight() * 0.55f), juce::Justification::centredTop);
+        g.drawText (mode == Mode::Ready ? "AGAIN" : "MY TRACK", txt.withTrimmedTop (txt.getHeight() * 0.55f), juce::Justification::centredTop);
     }
 }
 
 // ======================================================================================
+CommandStrip::CommandStrip (FINISHAudioProcessor& p) : proc (p)
+{
+    editor.setFont (mono (11.0f));
+    editor.setIndents (12, 4);
+    editor.setColour (juce::TextEditor::textColourId, moon);
+    editor.setColour (juce::TextEditor::highlightColourId, indigo.withAlpha (0.4f));
+    editor.setColour (juce::CaretComponent::caretColourId, cyan);
+    editor.onReturnKey = [this]
+    {
+        const auto t = editor.getText().trim();
+        if (t.isNotEmpty()) proc.setIntent (t);
+        editor.clear();
+        editor.unfocusAllComponents();
+        if (onSubmit) onSubmit();
+    };
+    editor.onEscapeKey = [this] { editor.clear(); editor.unfocusAllComponents(); };
+    editor.setTooltip (utf8 ("Écris ce que tu veux : \"finis mon morceau\", \"crée un bridge mélodique sombre\", "
+                             "\"rends le drop plus percutant\", \"masterise pour le club\"... puis Entrée."));
+    addAndMakeVisible (editor);
+    refresh();
+}
+
+void CommandStrip::resized() { editor.setBounds (getLocalBounds().withTrimmedRight (250)); }
+
+void CommandStrip::refresh()
+{
+    const auto msg = proc.getStatusMessage();
+    editor.setTextToShowWhenEmpty (msg.isEmpty() ? utf8 ("Dis à FINISH ce que tu veux…  (ex. crée un bridge mélodique sombre)") : msg, cyan.withAlpha (0.85f));
+    repaint();
+}
+
+void CommandStrip::paint (juce::Graphics& g)
+{
+    auto chips = getLocalBounds().toFloat().withTrimmedLeft ((float) getWidth() - 246.0f).reduced (0, 3.0f);
+    drawScreen (g, chips, 4.0f, true);
+    const auto& u = proc.getIntentUnderstood();
+    g.setFont (mono (8.5f));
+    g.setColour (u.isEmpty() ? dusk : violet.interpolatedWith (moon, 0.3f));
+    g.drawFittedText (u.isEmpty() ? juce::String (utf8 ("↵ POUR ENVOYER")) : u.joinIntoString ("  "), chips.reduced (8.0f, 0).toNearestInt(),
+                      juce::Justification::centredLeft, 1, 0.8f);
+}
+
+// ======================================================================================
 FINISHAudioProcessorEditor::FINISHAudioProcessorEditor (FINISHAudioProcessor& p)
-    : AudioProcessorEditor (&p), proc (p), trackMap (p), inspector (p), trackPanel (p), deck (p)
+    : AudioProcessorEditor (&p), proc (p), command (p), trackMap (p), inspector (p), trackPanel (p),
+      arrangement (p), composeColumn (p), composeConsole (p), masterView (p), masterColumn (p), masterConsole (p), deck (p)
 {
     setLookAndFeel (&lnf);
     faceplate = makeFaceplate (baseWidth, baseHeight, 2.0f);
     addAndMakeVisible (content);
 
-    for (auto* c : std::initializer_list<juce::Component*> { &refButton, &refClear, &matchButton, &bypassButton,
-                                                             &trackMap, &inspector, &trackPanel, &deck, &finishButton })
+    for (auto* c : std::initializer_list<juce::Component*> { &refButton, &refClear, &matchButton, &bypassButton, &command,
+                                                             &trackMap, &inspector, &trackPanel, &arrangement, &composeColumn, &composeConsole,
+                                                             &masterView, &masterColumn, &masterConsole, &deck, &finishButton })
         content.addAndMakeVisible (c);
+    trackPanel.intentEditor.setVisible (false);   // the header strip takes every request now
 
-    finishButton.setTooltip ("FINISH MY TRACK: press, play the whole song in your DAW, then stop playback.");
-    finishButton.onClick = [this] { proc.toggleAnalysis(); refreshAll(); };
+    const char* tabNames[] = { "COMPOSE", "SECTIONS", "MASTER" };
+    for (int i = 0; i < 3; ++i)
+    {
+        tabs[(size_t) i].setButtonText (tabNames[i]);
+        tabs[(size_t) i].onClick = [this, i] { setPage (i); };
+        content.addAndMakeVisible (tabs[(size_t) i]);
+    }
+    tabs[0].setTooltip (utf8 ("Les parties qui manquent à ton morceau, à écouter et envoyer dans Live."));
+    tabs[1].setTooltip (utf8 ("Ton morceau section par section : variations et transitions."));
+    tabs[2].setTooltip (utf8 ("Mastering : cible de loudness, plafond true-peak, chaîne en direct."));
 
-    refButton.setTooltip ("Load a finished commercial track to compare against (WAV, AIFF, FLAC, MP3, OGG).");
+    finishButton.setTooltip (utf8 ("FINISH MY TRACK : joue ton drop, ta boucle ou ta mélodie dans le DAW, puis appuie. "
+                                   "FINISH écrit l'intro, le build, le break, le drop 2, l'outro et lance le master."));
+    finishButton.onClick = [this] { proc.finishMyTrack(); refreshAll(); };
+
+    refButton.setTooltip (utf8 ("Charger un morceau de référence (WAV, AIFF, FLAC, MP3, OGG)."));
     refButton.getProperties().set ("led", "amber");
     refButton.onClick = [this] { chooseReference(); };
     refClear.getProperties().set ("style", "chip");
@@ -97,8 +164,8 @@ FINISHAudioProcessorEditor::FINISHAudioProcessorEditor (FINISHAudioProcessor& p)
     matchButton.setClickingTogglesState (true);
     bypassButton.setClickingTogglesState (true);
     bypassButton.getProperties().set ("led", "amber");
-    matchButton.setTooltip ("Keeps the output as loud as the input, so A/B compares quality, not volume.");
-    bypassButton.setTooltip ("Hear the original track (click-free, level matched).");
+    matchButton.setTooltip (utf8 ("Pendant le A/B, l'original est joué au même volume que le résultat."));
+    bypassButton.setTooltip (utf8 ("Écouter l'original (sans clic)."));
     matchAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (proc.params, ParamIDs::match, matchButton);
     bypassAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (proc.params, ParamIDs::bypass, bypassButton);
 
@@ -106,6 +173,9 @@ FINISHAudioProcessorEditor::FINISHAudioProcessorEditor (FINISHAudioProcessor& p)
     inspector.onSelect = [this] (TrackEngine::Selection s) { select (s); };
     trackPanel.onShowTrack = [this] { select (TrackEngine::Selection::track()); };
     trackPanel.onIntent = [this] { refreshAll(); };
+    command.onSubmit = [this] { refreshAll(); };
+    arrangement.onSelect = [this] (int s) { composeConsole.setSection (s); };
+    composeConsole.onChange = [this] { refreshAll(); };
 
     sendLookAndFeelChange();
 
@@ -116,9 +186,14 @@ FINISHAudioProcessorEditor::FINISHAudioProcessorEditor (FINISHAudioProcessor& p)
 
     lastMapStart = proc.getMusic().startTime;
     lastSectionCount = proc.getMusic().sections.size();
+    hadArrangement = proc.getComposer().hasArrangement();
     if (proc.getTrack().hasMap()) autoSelectBiggestOpportunity();
+    if (hadArrangement) selectArrangementSection (0);
+    setPage (proc.uiPage);
     refreshAll();
     startTimerHz (30);
+    // Keep the Ableton Live bridge script installed/up to date where a Live User Library exists.
+    { juce::String ignored; ArrangementExport::installLiveScript (ignored, false); }
 }
 
 FINISHAudioProcessorEditor::~FINISHAudioProcessorEditor()
@@ -142,17 +217,37 @@ namespace Layout
     const juce::Rectangle<int> deck { 36, 664, 1128, 112 };
 }
 
+void FINISHAudioProcessorEditor::setPage (int p)
+{
+    page = juce::jlimit (0, 2, p);
+    proc.uiPage = page;
+    for (int i = 0; i < 3; ++i) tabs[(size_t) i].setToggleState (i == page, juce::dontSendNotification);
+    trackMap.setVisible (page == sections);
+    inspector.setVisible (page == sections);
+    trackPanel.setVisible (page == sections);
+    arrangement.setVisible (page == compose);
+    composeColumn.setVisible (page == compose);
+    composeConsole.setVisible (page == compose);
+    masterView.setVisible (page == master);
+    masterColumn.setVisible (page == master);
+    masterConsole.setVisible (page == master);
+    finishButton.toFront (false);
+    content.repaint();
+}
+
 void FINISHAudioProcessorEditor::Content::resized()
 {
     auto& e = editor;
-    e.refButton.setBounds (572, 28, 140, 34);
-    e.refClear.setBounds (716, 33, 24, 24);
-    e.matchButton.setBounds (748, 28, 132, 34);
-    e.bypassButton.setBounds (888, 28, 118, 34);
-    e.trackMap.setBounds (Layout::screen);
-    e.trackPanel.setBounds (Layout::column);
+    for (int i = 0; i < 3; ++i) e.tabs[(size_t) i].setBounds (340 + i * 118, 26, 112, 34);
+    e.refButton.setBounds (712, 26, 132, 34);
+    e.refClear.setBounds (846, 31, 22, 24);
+    e.matchButton.setBounds (874, 26, 96, 34);
+    e.bypassButton.setBounds (974, 26, 80, 34);
+    e.command.setBounds (340, 68, 824, 26);
+    for (auto* c : std::initializer_list<juce::Component*> { &e.trackMap, &e.arrangement, &e.masterView }) c->setBounds (Layout::screen);
+    for (auto* c : std::initializer_list<juce::Component*> { &e.trackPanel, &e.composeColumn, &e.masterColumn }) c->setBounds (Layout::column);
+    for (auto* c : std::initializer_list<juce::Component*> { &e.inspector, &e.composeConsole, &e.masterConsole }) c->setBounds (Layout::console);
     e.finishButton.setBounds (Layout::column.getCentreX() - 60, Layout::column.getY() + 4, 120, 120);
-    e.inspector.setBounds (Layout::console);
     e.deck.setBounds (Layout::deck);
 }
 
@@ -161,7 +256,6 @@ void FINISHAudioProcessorEditor::Content::paint (juce::Graphics& g)
     auto r = getLocalBounds().toFloat();
     g.fillAll (void_);
 
-    // Chassis: anodised faceplate, bevelled rim, neon trim.
     auto chassis = r.reduced (4.0f);
     g.saveState();
     juce::Path chassisPath;
@@ -173,38 +267,21 @@ void FINISHAudioProcessorEditor::Content::paint (juce::Graphics& g)
     g.drawRoundedRectangle (chassis, 18.0f, 2.0f);
     g.setGradientFill (aurora (chassis.getX() + 60.0f, 0, chassis.getRight() - 60.0f, 0, 0.9f));
     g.fillRect (juce::Rectangle<float> (chassis.getX() + 60.0f, chassis.getBottom() - 3.0f, chassis.getWidth() - 120.0f, 1.5f));
-    g.setGradientFill (aurora (chassis.getX() + 60.0f, 0, chassis.getRight() - 60.0f, 0, 0.12f));
-    g.fillRect (juce::Rectangle<float> (chassis.getX() + 60.0f, chassis.getBottom() - 10.0f, chassis.getWidth() - 120.0f, 8.0f));
 
     for (auto p : { juce::Point<float> (20, 20), juce::Point<float> (r.getRight() - 20, 20),
                     juce::Point<float> (20, r.getBottom() - 20), juce::Point<float> (r.getRight() - 20, r.getBottom() - 20) })
         drawScrew (g, p, 6.0f, p.x * 0.01f + p.y * 0.02f);
 
-    // Header: neon logo + model plate
     neonText (g, "FINISH", display (34.0f, 0.14f), { 44.0f, 20.0f, 260.0f, 44.0f }, violet, juce::Justification::centredLeft);
     const float ww = juce::GlyphArrangement::getStringWidth (display (34.0f, 0.14f), "FINISH");
     drawMoonMark (g, { 44.0f + ww + 20.0f, 41.0f }, 10.0f, 1.0f);
-    engraved (g, u8 ("TRACK FINISHER  \xc2\xb7  MODEL FN-1"), { 46.0f, 66.0f, 300.0f, 12.0f }, 7.5f, juce::Justification::centredLeft);
+    engraved (g, utf8 ("TRACK FINISHER  ·  FN-2  ·  v" FINISH_VERSION_STRING), { 46.0f, 66.0f, 290.0f, 12.0f }, 7.5f, juce::Justification::centredLeft);
 
-    engraved (g, "INPUT", { 572.0f, 12.0f, 140.0f, 12.0f }, 6.5f);
-    engraved (g, "COMPARE", { 748.0f, 12.0f, 258.0f, 12.0f }, 6.5f);
-    g.setColour (juce::Colours::black.withAlpha (0.5f));
-    g.drawVerticalLine (1026, 22.0f, 70.0f);
-    g.setColour (juce::Colours::white.withAlpha (0.05f));
-    g.drawVerticalLine (1027, 22.0f, 70.0f);
-    drawLed (g, { 1048.0f, 45.0f }, 3.5f, mint, true);
-    engraved (g, "POWER", { 1060.0f, 39.0f, 60.0f, 12.0f }, 7.0f, juce::Justification::centredLeft);
-    engraved (g, "v" FINISH_VERSION_STRING, { 1100.0f, 39.0f, 64.0f, 12.0f }, 7.0f, juce::Justification::centredRight, dusk);
+    engraved (g, "MODE", { 340.0f, 12.0f, 348.0f, 12.0f }, 6.5f);
+    engraved (g, "COMPARE", { 712.0f, 12.0f, 342.0f, 12.0f }, 6.5f);
+    drawLed (g, { 1080.0f, 43.0f }, 3.5f, mint, true);
+    engraved (g, "POWER", { 1092.0f, 37.0f, 60.0f, 12.0f }, 7.0f, juce::Justification::centredLeft);
 
-    // Status LCD strip
-    auto strip = juce::Rectangle<float> (572.0f, 74.0f, 592.0f, 18.0f);
-    drawScreen (g, strip, 3.0f, true);
-    g.setColour (cyan.withAlpha (0.85f));
-    g.setFont (mono (9.5f));
-    const auto msg = editor.proc.getStatusMessage();
-    g.drawText (msg.isEmpty() ? juce::String ("READY. PLACE FINISH LAST ON THE MASTER.") : msg.toUpperCase(), strip.reduced (8.0f, 0), juce::Justification::centredLeft, true);
-
-    // Section engravings + grooves
     auto groove = [&] (float y)
     {
         g.setColour (juce::Colours::black.withAlpha (0.55f));
@@ -215,8 +292,9 @@ void FINISHAudioProcessorEditor::Content::paint (juce::Graphics& g)
     groove (98.0f);
     groove (460.0f);
     groove (652.0f);
-    engraved (g, "SECTION CONSOLE", { 36.0f, 462.0f, 300.0f, 10.0f }, 6.5f, juce::Justification::centredLeft);
-    engraved (g, "MASTER CONTROLS", { 36.0f, 654.0f, 300.0f, 10.0f }, 6.5f, juce::Justification::centredLeft);
+    const char* consoleNames[] = { "PART", "SECTION CONSOLE", "MASTER CHAIN" };
+    engraved (g, consoleNames[editor.page], { 36.0f, 462.0f, 300.0f, 10.0f }, 6.5f, juce::Justification::centredLeft);
+    engraved (g, "MIX CONTROLS", { 36.0f, 654.0f, 300.0f, 10.0f }, 6.5f, juce::Justification::centredLeft);
     engraved (g, "METERS", { 824.0f, 654.0f, 300.0f, 10.0f }, 6.5f, juce::Justification::centredLeft);
 }
 
@@ -225,6 +303,12 @@ void FINISHAudioProcessorEditor::select (TrackEngine::Selection s)
 {
     trackMap.setSelection (s);
     inspector.setSelection (s);
+}
+
+void FINISHAudioProcessorEditor::selectArrangementSection (int s)
+{
+    arrangement.setSelected (s);
+    composeConsole.setSection (s);
 }
 
 void FINISHAudioProcessorEditor::autoSelectBiggestOpportunity()
@@ -256,8 +340,10 @@ void FINISHAudioProcessorEditor::updateFinishButton()
 {
     using S = FINISHAudioProcessor::AnalysisState;
     const auto st = proc.getAnalysisState();
-    finishButton.setMode (st == S::Listening ? ArcadeButton::Mode::Listening : (st == S::Ready ? ArcadeButton::Mode::Ready : ArcadeButton::Mode::Idle),
-                          proc.getListeningSeconds());
+    const auto mode = st == S::Listening ? ArcadeButton::Mode::Listening
+                    : (proc.isComposing() ? ArcadeButton::Mode::Working
+                    : (proc.getComposer().hasArrangement() ? ArcadeButton::Mode::Ready : ArcadeButton::Mode::Idle));
+    finishButton.setMode (mode, proc.getListeningSeconds());
 }
 
 void FINISHAudioProcessorEditor::refreshAll()
@@ -276,23 +362,38 @@ void FINISHAudioProcessorEditor::refreshAll()
     }
     if (proc.getAnalysisState() == FINISHAudioProcessor::AnalysisState::Listening) wasListening = true;
 
+    // A new arrangement: show it.
+    const bool has = proc.getComposer().hasArrangement();
+    if (has && ! hadArrangement)
+    {
+        setPage (compose);
+        selectArrangementSection (0);
+    }
+    hadArrangement = has;
+    if (has && arrangement.getSelected() >= (int) proc.getComposer().getArrangement().sections.size())
+        selectArrangementSection (0);
+
     const auto& ref = proc.getReference();
-    refButton.setButtonText (proc.isReferenceLoading() ? "LOADING..." : (ref.valid ? "REF " + ref.name.toUpperCase().substring (0, 10) : "REFERENCE"));
+    refButton.setButtonText (proc.isReferenceLoading() ? "LOADING..." : (ref.valid ? "REF " + ref.name.toUpperCase().substring (0, 8) : "REFERENCE"));
     refButton.setToggleState (ref.valid, juce::dontSendNotification);
     refClear.setVisible (ref.valid);
 
-    inspector.refresh();
-    trackPanel.refresh();
-    trackMap.repaint();
+    command.refresh();
+    if (page == sections) { inspector.refresh(); trackPanel.refresh(); trackMap.repaint(); }
+    composeColumn.refresh();
+    composeConsole.refresh();
+    arrangement.repaint();
+    masterColumn.refresh();
     deck.repaint();
-    content.repaint (570, 72, 600, 22);
 }
 
 void FINISHAudioProcessorEditor::timerCallback()
 {
-    trackMap.repaint();
+    if (page == sections) trackMap.repaint();
+    if (page == compose && proc.isPreviewing()) arrangement.repaint();
+    if (page == master) { masterView.tick(); masterConsole.repaint(); }
     deck.repaintLive();
-    if (proc.getAnalysisState() == FINISHAudioProcessor::AnalysisState::Listening || finishButton.isOver())
+    if (proc.getAnalysisState() == FINISHAudioProcessor::AnalysisState::Listening || proc.isComposing() || finishButton.isOver())
         updateFinishButton();
     if (proc.getResultVersion() != lastVersion || proc.isReferenceLoading())
         refreshAll();

@@ -2,3 +2,5 @@ build/
 .DS_Store
 *.user
 .vs/
+build-san/
+live_request_test.json

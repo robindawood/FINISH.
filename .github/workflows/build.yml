@@ -4,7 +4,7 @@ name: Build FINISH
 #   macOS   : FINISH-<version>-macOS.pkg        (VST3 + AU, Apple Silicon + Intel)
 #   Windows : FINISH-<version>-Windows-Setup.exe (VST3, 64-bit)
 # plus plain zips, after running the offline tests and pluginval.
-# Download them from the "Artifacts" section of the run, or from the Release created when you push a tag (v1.2.0).
+# Download them from the "Artifacts" section of the run, or from the Release created when you push a tag (v2.0.0).
 
 on:
   push:
@@ -14,7 +14,7 @@ on:
   workflow_dispatch:
 
 env:
-  VERSION: 1.2.0
+  VERSION: 2.0.0
 
 jobs:
   build:
@@ -61,6 +61,10 @@ jobs:
         if: runner.os == 'macOS'
         run: build/FinishTests_artefacts/Release/FinishTests
 
+      - name: Test the Ableton Live bridge script (mock Live API)
+        if: runner.os == 'macOS'
+        run: python3 Tests/test_live_bridge.py live_request_test.json
+
       - name: Ad-hoc sign (macOS)
         if: runner.os == 'macOS'
         run: |
@@ -73,14 +77,14 @@ jobs:
         run: |
           curl -sSL -o pluginval.zip https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_Windows.zip
           7z x pluginval.zip -opluginval > /dev/null
-          ./pluginval/pluginval.exe --strictness-level 5 --skip-gui-tests --validate-in-process --validate "build/FINISH_artefacts/Release/VST3/FINISH.vst3"
+          ./pluginval/pluginval.exe --strictness-level 10 --skip-gui-tests --validate-in-process --validate "build/FINISH_artefacts/Release/VST3/FINISH.vst3"
 
       - name: Validate with pluginval (macOS)
         if: runner.os == 'macOS'
         run: |
           curl -sSL -o pluginval.zip https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_macOS.zip
           unzip -q pluginval.zip -d pluginval
-          ./pluginval/pluginval.app/Contents/MacOS/pluginval --strictness-level 5 --skip-gui-tests --validate-in-process --validate build/FINISH_artefacts/Release/VST3/FINISH.vst3
+          ./pluginval/pluginval.app/Contents/MacOS/pluginval --strictness-level 10 --skip-gui-tests --validate-in-process --validate build/FINISH_artefacts/Release/VST3/FINISH.vst3
 
       # ---------------- macOS installer (.pkg) ----------------
       - name: Build macOS installer
@@ -98,7 +102,27 @@ jobs:
                    --identifier com.finishaudio.finish.vst3 --version "$VERSION" pkg/FINISH-VST3.pkg
           pkgbuild --root pkg/au --component-plist pkg/au.plist --install-location "/Library/Audio/Plug-Ins/Components" \
                    --identifier com.finishaudio.finish.au --version "$VERSION" pkg/FINISH-AU.pkg
-          productbuild --package pkg/FINISH-VST3.pkg --package pkg/FINISH-AU.pkg "dist/FINISH-$VERSION-macOS.pkg"
+          # Ableton Live bridge: payload in Application Support, copied into the user's Live User Library after install
+          mkdir -p "pkg/live/FINISH/LiveScript" pkg/livescripts
+          cp Resources/LiveScript/*.py "pkg/live/FINISH/LiveScript/"
+          cat > pkg/livescripts/postinstall <<'POST'
+          #!/bin/bash
+          U=$(stat -f%Su /dev/console)
+          H=$(dscl . -read "/Users/$U" NFSHomeDirectory 2>/dev/null | awk '{print $2}')
+          [ -z "$H" ] && H="/Users/$U"
+          if [ -d "$H/Music/Ableton" ]; then
+            D="$H/Music/Ableton/User Library/Remote Scripts/FINISH"
+            mkdir -p "$D"
+            cp "/Library/Application Support/FINISH/LiveScript/"*.py "$D/"
+            chown -R "$U" "$H/Music/Ableton/User Library/Remote Scripts" || true
+          fi
+          exit 0
+          POST
+          sed -i '' 's/^          //' pkg/livescripts/postinstall
+          chmod +x pkg/livescripts/postinstall
+          pkgbuild --root pkg/live --scripts pkg/livescripts --install-location "/Library/Application Support" \
+                   --identifier com.finishaudio.finish.livebridge --version "$VERSION" pkg/FINISH-LiveBridge.pkg
+          productbuild --package pkg/FINISH-VST3.pkg --package pkg/FINISH-AU.pkg --package pkg/FINISH-LiveBridge.pkg "dist/FINISH-$VERSION-macOS.pkg"
           mkdir zipdir
           cp -R build/FINISH_artefacts/Release/VST3/FINISH.vst3 build/FINISH_artefacts/Release/AU/FINISH.component INSTALL_FR.txt zipdir/
           (cd zipdir && zip -qry "../dist/FINISH-$VERSION-macOS-VST3-AU.zip" .)

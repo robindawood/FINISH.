@@ -754,7 +754,7 @@ static void testFinishEndToEnd()
     CHECK (p.getComposer().getArrangement().sections.size() == sections + 1, "command did not add the bridge");
 
     // Export + state.
-    const auto r = p.exportArrangement();
+    const auto r = p.exportArrangement (false);
     CHECK (r.ok && r.fullMidi.existsAsFile(), "export from the processor failed");
     r.folder.deleteRecursively();
     juce::MemoryBlock state;
@@ -954,6 +954,7 @@ static void snapshot (const juce::File& base)
     feedTimed (p, ph, slice (mix, o.sr, 0, 3), o.sr, 12.0, 512, true);
     pump (200);
     writePng (*e, file ("idle"));
+    e->setPage (FINISHAudioProcessorEditor::sections);
 
     // Listening, half-way through the song.
     p.toggleAnalysis();
@@ -967,7 +968,7 @@ static void snapshot (const juce::File& base)
     pump (200);
 
     p.setIntent ("plus large mais pas plus fort");
-    e->getTrackPanel().intentEditor.setText (p.getIntentText(), false);
+    e->getCommandStrip().refresh();
     // Apply DROP 1 · A, keep the playhead inside DROP 2.
     p.editTrack ([] (TrackEngine& t) { t.apply (Sel::section (3), 0, 1.0f); });
     const auto& S = p.getTrack().getMusic().sections;
@@ -992,8 +993,42 @@ static void snapshot (const juce::File& base)
     e->select (Sel::track());
     pump (250);
     writePng (*e, file ("track"));
-
     ed.reset();
+
+    // COMPOSE + MASTER pages from a drop played in the DAW.
+    {
+        double bpm = 0;
+        const auto drop = renderReferenceDropForTests (o.sr, bpm);
+        FINISHAudioProcessor q;
+        TestPlayHead ph2; ph2.bpm = bpm;
+        q.prepareToPlay (o.sr, 512);
+        q.setPlayHead (&ph2);
+        std::unique_ptr<juce::AudioProcessorEditor> ed2 (q.createEditorIfNeeded());
+        auto* e2 = dynamic_cast<FINISHAudioProcessorEditor*> (ed2.get());
+        if (e2 == nullptr) return;
+        feedTimed (q, ph2, drop, o.sr, 64.0 * 60.0 / bpm, 512, true);
+        ph2.playing = false;
+        feedTimed (q, ph2, slice (drop, o.sr, 0, 0.3), o.sr, 0.0, 512, true);
+        q.finishMyTrack();
+        for (int i = 0; i < 300 && ! q.getComposer().hasArrangement(); ++i) pump (20);
+        pump (100);
+        e2->selectArrangementSection (2);
+        q.previewSection (2, true);
+        ph2.playing = true;
+        juce::AudioBuffer<float> sil (2, (int) (o.sr * 3)); sil.clear();
+        feedTimed (q, ph2, sil, o.sr, 300.0, 512, true);
+        pump (150);
+        writePng (*e2, file ("compose"));
+        q.stopPreview();
+        e2->selectArrangementSection (4);
+        pump (100);
+        writePng (*e2, file ("compose_break"));
+        e2->setPage (FINISHAudioProcessorEditor::master);
+        for (int k = 0; k < 4; ++k) { feedTimed (q, ph2, drop, o.sr, 64.0 * 60.0 / bpm, 512, true); }
+        pump (150);
+        writePng (*e2, file ("master"));
+        ed2.reset();
+    }
 }
 
 int main (int argc, char** argv)

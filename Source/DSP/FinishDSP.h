@@ -149,6 +149,7 @@ private:
     KWeighting kIn, kOut;
     float pIn = 0, pOut = 0, pInShort = 0, pOutShort = 0, pOutMom = 0, matchCoef = 0, shortCoef = 0, momCoef = 0;
     float matchGain = 1.0f, matchSmoothCoef = 0;
+    float peakHoldDb = -100.0f;
     float corrDb = 0.0f;                 // closed-loop loudness correction (audio time, deterministic)
     std::atomic<float> corrDbOut { 0.0f };
 

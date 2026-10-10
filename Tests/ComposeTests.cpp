@@ -332,6 +332,7 @@ static void testExport()
     const auto v = juce::JSON::parse (json);
     CHECK (v.isObject() && v["tracks"].isArray() && v["tracks"].getArray()->size() >= 5, "Live request malformed");
     dir.getChildFile ("request_test.json").replaceWithText (json);
+    juce::File::getCurrentWorkingDirectory().getChildFile ("live_request_test.json").replaceWithText (json);   // for Tests/test_live_bridge.py
     std::cout << "  guide:\n" << r.guide.loadFileAsString().upToFirstOccurrenceOf ("LE MIDI", false, false) << "\n";
 }
 

@@ -1,29 +1,40 @@
-FINISH 1.2.0 - Installation
-===========================
+FINISH 2.0 - Installation et utilisation
+========================================
 
-WINDOWS (FL Studio, Ableton Live)
-  1. Copiez le dossier "FINISH.vst3" dans :
-       C:\Program Files\Common Files\VST3\
-  2. FL Studio : Options > Manage plugins > Find more plugins (ou "Start scan").
-     Ableton Live : Options > Preferences > Plug-ins > activez "Use VST3 Plug-in System Folders" puis "Rescan".
+INSTALLER
+  Mac     : double-cliquez FINISH-2.0.0-macOS.pkg (VST3 + AU + pont Ableton Live).
+            Si macOS bloque : Réglages Système > Confidentialité et sécurité > « Ouvrir quand même ».
+  Windows : double-cliquez FINISH-2.0.0-Windows-Setup.exe (VST3 + pont Ableton Live).
+  Puis relancez le scan des plugins :
+    Ableton Live : Réglages > Plug-ins > Rescanner.
+    FL Studio    : Options > Manage plugins > Find more plugins.
 
-macOS (FL Studio, Ableton Live, Logic)
-  1. VST3 : copiez "FINISH.vst3" dans  ~/Library/Audio/Plug-Ins/VST3/
-     AU   : copiez "FINISH.component" dans ~/Library/Audio/Plug-Ins/Components/
-  2. Si macOS bloque le plugin (il n'est pas notarié), ouvrez le Terminal et tapez :
-       xattr -dr com.apple.quarantine ~/Library/Audio/Plug-Ins/VST3/FINISH.vst3
-       xattr -dr com.apple.quarantine ~/Library/Audio/Plug-Ins/Components/FINISH.component
-  3. Relancez le scan des plugins dans votre DAW.
+ACTIVER L'ENVOI DIRECT DANS ABLETON LIVE (une seule fois)
+  Réglages > Link, Tempo & MIDI > Control Surface : choisissez « FINISH »
+  (aucun port MIDI à régler). S'il n'apparaît pas, redémarrez Live.
 
 UTILISATION
-  1. Placez FINISH en DERNIER sur la piste Master.
-  2. Appuyez sur le gros bouton rond FINISH, puis lancez la lecture du morceau en entier.
-  3. Arrêtez la lecture : la TRACK MAP apparaît (sections, transitions, score).
-     FINISH sélectionne automatiquement la plus grosse opportunité.
-  4. Cliquez une section ou un losange de transition. Comparez A / B / C :
-     cliquer une carte = PREVIEW (rejouez ce passage dans le DAW pour l'entendre).
-  5. APPLY applique la direction choisie, KEEP ORIGINAL laisse la section intacte,
-     REGENERATE propose 3 autres directions, UNDO revient en arrière.
-  6. Clic droit sur une section (ou clic sur "?") pour corriger son type.
-     Glissez une frontière pour déplacer un marqueur.
-  7. COHERENCE (potard blanc) garde le morceau homogène. A/B BYPASS compare à volume égal.
+  1. Mettez FINISH en DERNIER sur la piste Master.
+  2. Jouez votre drop, une boucle ou même une simple mélodie (8 mesures ou plus), puis arrêtez.
+  3. Appuyez sur le gros bouton FINISH MY TRACK.
+     FINISH détecte tempo, tonalité, groove, basse, accords, mélodie et style,
+     écrit les parties manquantes (INTRO, BUILD, BREAK/BRIDGE, DROP 2, OUTRO, FX)
+     en 3 versions : FIDÈLE, ATMO, INTENSE, et allume le mastering (cible -11 LUFS).
+  4. Page COMPOSE :
+       - clic sur le nom d'une partie = écouter en boucle (sons intégrés de FINISH) ;
+       - cadenas = verrouiller ; dé = nouvelle idée ; clic droit = plus intense, plus sombre... ;
+       - tonalité / style / tempo : cliquez pour corriger si FINISH s'est trompé ;
+       - glissez n'importe quel clip vers votre DAW (MIDI ou WAV).
+  5. SEND TO LIVE : crée de NOUVELLES pistes « FINISH DRUMS / BASS / CHORDS / LEAD / PAD / FX »
+     avec les clips nommés INTRO, BUILD, DROP 2... (Arrangement dans Live 12, sinon nouvelles scènes).
+     Rien n'est supprimé ni remplacé dans votre projet.
+     EXPORT : tout dans Musique/FINISH (MIDI multipiste + clips par section + WAV + guide), pour FL Studio et les autres DAW.
+  6. Le MIDI ne contient pas de sons : FINISH charge un instrument d'Ableton quand il peut,
+     sinon le guide (LISEZ-MOI FINISH.txt) dit quoi mettre sur chaque piste.
+  7. Écrivez ce que vous voulez dans la barre du haut puis Entrée :
+       « finis mon morceau », « crée un bridge mélodique sombre », « ajoute un build-up avant le drop »,
+       « crée un outro progressif », « rends le drop plus percutant », « masterise pour le club »...
+  8. Page MASTER : cible STREAM -14 / BALANCED -11 / CLUB -9 / LOUD -7, plafond true-peak,
+     chaîne en direct (équilibre tonal, leveller 3 bandes, drive, clipper, limiteur true-peak).
+     A/B compare à volume égal.
+  9. Page SECTIONS : votre morceau complet section par section (variations, transitions).

@@ -1,5 +1,26 @@
 # Changelog
 
+## 2.0.0
+- FINISH COMPOSE: FINISH MY TRACK now writes the missing parts of the song from what you played (a drop, a loop or a lone melody):
+  - musical analysis of the played audio: tempo grid (host), key with confidence and relative major/minor resolution,
+    groove templates (kick / snare-clap / hats, swing), bass line, chord loop, melody motif, energy, style guess;
+    every uncertain estimate is flagged and correctable (key, style, tempo x2 / /2);
+  - arrangement generator: INTRO, BUILD, DROP (yours, untouched), BREAK, BRIDGE, BUILD 2, DROP 2, OUTRO + transition FX
+    (risers, sweeps, reverse cymbals, impacts, downlifters), MIDI for drums / bass / chords / lead / pad with filter (CC74) automation;
+  - three proposals (FIDELE / ATMO / INTENSE), creativity control, per-part regenerate, lock, mood moves, undo;
+  - built-in instruments for preview inside the plugin (solo or over the DAW);
+  - free commands (FR/EN): "finis mon morceau", "crée un bridge mélodique sombre", "ajoute un build-up avant le drop",
+    "rends le drop plus percutant" (punch + accent layer on your drop), "masterise pour le club"...;
+  - delivery: SEND TO LIVE (Remote Script, new tracks and clips only), EXPORT (multitrack MIDI, clips per section, WAV FX,
+    guide), drag & drop of any clip into the DAW.
+- Mastering: loudness targets reached by a closed loop (±0.5 LU), tonal balance shelves, 3-band leveller (LR4),
+  soft clipper, band-limited 4x true-peak look-ahead limiter (true peak within 0.15 dB of the ceiling, FFT-verified).
+- New pages COMPOSE / SECTIONS / MASTER, command strip in the header, MASTER chain view, terser French UI.
+- FINISH MY TRACK uses what was just played (no need to arm listening first).
+- Tests: 11,700+ checks incl. end-to-end (play a drop, one click, arrangement + master + preview + export), Live bridge mock test;
+  pluginval strictness 10.
+
+
 ## 1.2.0
 - New hardware faceplate ("synthwave night machine", model FN-1): brushed anodised chassis with screws and neon trim,
   neon-tube logo, round illuminated arcade FINISH key, CRT track-map screen (scanlines, synthwave grid and sun),

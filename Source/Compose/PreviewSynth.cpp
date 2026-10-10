@@ -1,4 +1,6 @@
-#pragma GCC optimize ("O2")   // GCC 13 -O3 mis-dispatched the drum switch in renderVoice (verified with sanitizers); O2 is correct
+#if defined (__GNUC__) && ! defined (__clang__)
+ #pragma GCC optimize ("O2")   // GCC 13 -O3 mis-dispatched the drum switch in renderVoice (verified with sanitizers); O2 is correct
+#endif
 #include <iostream>
 #include "PreviewSynth.h"
 

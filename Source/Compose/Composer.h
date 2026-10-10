@@ -28,6 +28,7 @@ public:
     void selectFlavour (Flavour f);
     void setCreativity (float c);
     void regenerateSection (int index);
+    void applyToSection (int index, const SectionMood& mood, int bars);   // mood moves from the arrangement view
     void toggleLock (int index);
     void overrideKey (int root, bool minor);
     void overrideStyle (Style s);
