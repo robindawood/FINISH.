@@ -142,6 +142,13 @@ void FINISHAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
     s.driveDb = targetIdx > 0 ? autoDriveDb.load() : s.macros.loudness * s.macros.amount * 10.0f;
     s.autoLoudness = targetIdx > 0;
     s.targetLufs = loudnessTargets[targetIdx].lufs;
+    // Mastering stage: leveller, clipper and tonal balance scale with how loud the target is.
+    static constexpr float glueFor[] = { 0.0f, 0.45f, 0.6f, 0.7f, 0.8f };
+    static constexpr float clipFor[] = { 0.0f, 0.15f, 0.4f, 0.65f, 0.85f };
+    s.glue = glueFor[targetIdx];
+    s.clip = clipFor[targetIdx];
+    s.eqLowDb = targetIdx > 0 ? autoEqLow.load() : 0.0f;
+    s.eqHighDb = targetIdx > 0 ? autoEqHigh.load() : 0.0f;
     dsp.process (buffer, s);
 }
 
@@ -516,6 +523,28 @@ juce::File FINISHAudioProcessor::exportClipForDrag (int section, Lane lane)
 
 void FINISHAudioProcessor::rebuildDecisions()
 {
+    // Tonal balance for the mastering stage: towards the reference when there is one, else towards a sane range.
+    {
+        float lo = 0, hi = 0;
+        if (features.valid)
+        {
+            auto ratioDb = [] (float a, float b) { return 10.0f * std::log10 (std::max (a, 1.0e-6f) / std::max (b, 1.0e-6f)); };
+            if (reference.valid)
+            {
+                lo = juce::jlimit (-2.5f, 2.5f, 0.5f * ratioDb (reference.features.lowRatio, features.lowRatio));
+                hi = juce::jlimit (-2.5f, 2.5f, 0.5f * ratioDb (reference.features.highRatio, features.highRatio));
+            }
+            else
+            {
+                if (features.lowRatio > 0.72f) lo = -std::min (2.5f, (features.lowRatio - 0.72f) * 12.0f);
+                else if (features.lowRatio < 0.30f) lo = std::min (2.5f, (0.30f - features.lowRatio) * 10.0f);
+                if (features.highRatio > 0.15f) hi = -std::min (2.5f, (features.highRatio - 0.15f) * 20.0f);
+                else if (features.highRatio < 0.03f) hi = std::min (2.5f, (0.03f - features.highRatio) * 80.0f);
+            }
+        }
+        autoEqLow.store (lo);
+        autoEqHigh.store (hi);
+    }
     diagnoses = diagnosisEngine.analyze (features, track.getMusic(), reference);
     decision = decisionEngine.build (diagnoses, intent, features.valid);
     score = features.valid ? DiagnosisEngine::finishScore (diagnoses) : 0;

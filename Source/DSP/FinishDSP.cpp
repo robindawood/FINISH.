@@ -17,6 +17,8 @@ void FinishDSP::prepare (double sampleRate, int maxBlockSize, int numChannels)
         s->reset (sr, 0.05);
     for (auto* s : { &sHp, &sLp, &sGate, &sEcho, &sSpace })
         s->reset (sr, 0.08);
+    for (auto* s : { &sEqLow, &sEqHigh, &sGlue, &sClip })
+        s->reset (sr, 0.3);
     sBypass.reset (sr, 0.02);
     sDry.reset (sr, 0.03);
     sTrim.reset (sr, 0.03);
@@ -30,6 +32,42 @@ void FinishDSP::prepare (double sampleRate, int maxBlockSize, int numChannels)
     matchSmoothCoef = envCoeff (sr, 0.3);
     gateCoef = envCoeff (sr, 0.0015);
 
+    // 3-band split: Linkwitz-Riley 4 (two Butterworth sections) at 120 Hz and 4 kHz.
+    for (auto* b : { &xLow1a, &xLow1b }) b->setLowPass (sr, 120.0, 0.7071);
+    for (auto* b : { &xHigh1a, &xHigh1b }) b->setHighPass (sr, 120.0, 0.7071);
+    for (auto* b : { &xLow2a, &xLow2b, &apLowA }) b->setLowPass (sr, 4000.0, 0.7071);
+    for (auto* b : { &xHigh2a, &xHigh2b, &apHighA }) b->setHighPass (sr, 4000.0, 0.7071);
+    apLowB = apLowA; apHighB = apHighA;
+    nyqA.setLowPass (sr, std::min (20000.0, sr * 0.43), 0.5412);
+    nyqB.setLowPass (sr, std::min (20000.0, sr * 0.43), 1.3066);
+    bandAtt = envCoeff (sr, 0.015); bandRel = envCoeff (sr, 0.25);
+    bandRmsCoef = envCoeff (sr, 2.0); bandGrSmooth = envCoeff (sr, 0.03);
+
+    // True-peak interpolator: windowed sinc (Kaiser), split in 4 phases = the 4 points between two samples.
+    {
+        constexpr int L = 4, N = tpTaps * L;
+        double h[N];
+        const double beta = 9.0;
+        auto bessel0 = [] (double x) { double sum = 1, t = 1; for (int k = 1; k < 25; ++k) { t *= (x / (2 * k)) * (x / (2 * k)); sum += t; } return sum; };
+        for (int n = 0; n < N; ++n)
+        {
+            const double m = n - (N - 1) / 2.0;
+            const double x = m / L;
+            // cut-off 10 % above Nyquist: flat passband up to Nyquist, so peaks are over- rather than under-estimated
+            const double fcut = 1.1, ax = juce::MathConstants<double>::pi * x * fcut;
+            const double sinc = std::abs (x) < 1.0e-12 ? 1.0 : std::sin (ax) / ax;
+            const double r = 2.0 * n / (N - 1) - 1.0;
+            h[n] = sinc * bessel0 (beta * std::sqrt (std::max (0.0, 1.0 - r * r))) / bessel0 (beta);
+        }
+        // With an even length the centre falls between taps: the 4 phases are the 4 in-between points.
+        for (int ph = 0; ph < L; ++ph)
+        {
+            double sum = 0;
+            for (int k = 0; k < tpTaps; ++k) sum += h[k * L + ph];
+            for (int k = 0; k < tpTaps; ++k) tpCoef[ph][k] = (float) (h[k * L + ph] / sum);
+        }
+    }
+
     sideLowPass.setLowPass (sr, 140.0, 0.7071);
     sideLowPass2.setLowPass (sr, 140.0, 0.7071);
     kIn.prepare (sr); kOut.prepare (sr);
@@ -37,6 +75,8 @@ void FinishDSP::prepare (double sampleRate, int maxBlockSize, int numChannels)
     // Look-ahead: 1.5 ms (reported to the host as latency).
     lookahead = std::max (8, (int) std::round (sr * 0.0015));
     limAtt = envCoeff (sr, (double) lookahead / sr / 4.0);
+    rampLen = std::max (2, lookahead / 2);   // must stay below lookahead minus the detector delay (~12 samples)
+    rampBuf.assign ((size_t) rampLen, 1.0f);
     limRel = envCoeff (sr, 0.080);
     for (int c = 0; c < 2; ++c)
     {
@@ -68,6 +108,7 @@ void FinishDSP::prepare (double sampleRate, int maxBlockSize, int numChannels)
     sBypass.setCurrentAndTargetValue (0.0f);
     sDry.setCurrentAndTargetValue (0.0f);
     sTrim.setCurrentAndTargetValue (1.0f);
+    for (auto* s : { &sEqLow, &sEqHigh, &sGlue, &sClip }) s->setCurrentAndTargetValue (0.0f);
     reset();
 }
 
@@ -79,13 +120,19 @@ void FinishDSP::reset()
     hpf.reset(); lpf.reset();
     hpf.set (sr, 20.0, 0.9f); lpf.set (sr, sr * 0.45, 0.9f);
     gateEnv = 1.0f; freePhase = 0;
+    for (auto* b : { &mEqLow, &mEqHigh, &nyqA, &nyqB, &xLow1a, &xLow1b, &xHigh1a, &xHigh1b, &xLow2a, &xLow2b, &xHigh2a, &xHigh2b, &apLowA, &apLowB, &apHighA, &apHighB })
+        b->reset();
+    for (int k = 0; k < 3; ++k) { bandEnv[k] = bandRms[k] = bandGr[k] = 0.0f; }
+    lastEqLow = lastEqHigh = 1000.0f;
+    eqCounter = 0;
+    std::memset (tpHist, 0, sizeof (tpHist));
+    tpPos = 0;
     for (int c = 0; c < 2; ++c)
     {
         std::fill (laBuf[c].begin(), laBuf[c].end(), 0.0f);
         std::fill (dryDelay[c].begin(), dryDelay[c].end(), 0.0f);
         std::fill (echoBuf[c].begin(), echoBuf[c].end(), 0.0f);
         echoLp[c] = 0;
-        hist[c][0] = hist[c][1] = hist[c][2] = 0;
     }
     echoPos = 0;
     reverb.reset();
@@ -93,6 +140,9 @@ void FinishDSP::reset()
     qHead = qTail = 0;
     laPos = 0;
     limGain = 1.0f;
+    std::fill (rampBuf.begin(), rampBuf.end(), 1.0f);
+    rampSum = (double) rampLen;
+    rampPos = 0;
     kIn.reset(); kOut.reset();
     pIn = pOut = pInShort = pOutShort = pOutMom = 0.0f;
     matchGain = 1.0f;
@@ -146,6 +196,10 @@ void FinishDSP::process (juce::AudioBuffer<float>& buffer, const Settings& s) no
     sGate.setTargetValue (juce::jlimit (0.0f, 1.0f, s.fx.gate));
     sEcho.setTargetValue (juce::jlimit (0.0f, 1.0f, s.fx.echo));
     sSpace.setTargetValue (juce::jlimit (0.0f, 1.0f, s.fx.space));
+    sEqLow.setTargetValue (juce::jlimit (-4.0f, 4.0f, s.eqLowDb));
+    sEqHigh.setTargetValue (juce::jlimit (-4.0f, 4.0f, s.eqHighDb));
+    sGlue.setTargetValue (juce::jlimit (0.0f, 1.0f, s.glue));
+    sClip.setTargetValue (juce::jlimit (0.0f, 1.0f, s.clip));
 
     float* L = buffer.getWritePointer (0);
     float* R = nc > 1 ? buffer.getWritePointer (1) : nullptr;
@@ -169,7 +223,7 @@ void FinishDSP::process (juce::AudioBuffer<float>& buffer, const Settings& s) no
 void FinishDSP::processChunk (float* L, float* R, int n, const Settings& s, double ppqStart) noexcept
 {
     const bool stereo = R != nullptr;
-    float blockGr = 0.0f, blockTp = 0.0f;
+    float blockGr = 0.0f, blockTp = 0.0f, blockClip = 1.0f;
     const double beatsPerSample = std::max (1.0, s.bpm) / 60.0 / sr;
 
     // Echo time: dotted eighth, tempo-synced.
@@ -314,18 +368,101 @@ void FinishDSP::processChunk (float* L, float* R, int n, const Settings& s, doub
         const float dl = dryL[(size_t) i], dr = dryR[(size_t) i];
         l = dl + amount * (l - dl);
         r = dr + amount * (r - dr);
+
+        // ---- Mastering: tonal balance shelves
+        const float eqLo = sEqLow.getNextValue(), eqHi = sEqHigh.getNextValue();
+        if (++eqCounter >= 64)
+        {
+            eqCounter = 0;
+            if (std::abs (eqLo - lastEqLow) > 0.01f) { mEqLow.setLowShelf (sr, 110.0, eqLo); lastEqLow = eqLo; }
+            if (std::abs (eqHi - lastEqHigh) > 0.01f) { mEqHigh.setHighShelf (sr, 9000.0, eqHi); lastEqHigh = eqHi; }
+        }
+        if (std::abs (lastEqLow) > 0.01f || std::abs (lastEqHigh) > 0.01f)
+        {
+            l = mEqHigh.process (mEqLow.process (l, 0), 0);
+            r = stereo ? mEqHigh.process (mEqLow.process (r, 1), 1) : l;
+        }
+
+        // ---- Mastering: 3-band leveller. Each band's peaks are held near its own average (+3 dB crest),
+        // so a loud kick or a harsh hat no longer drives the whole limiter.
+        const float glue = sGlue.getNextValue();
+        if (glue > 1.0e-4f)
+        {
+            float bl[3], br[3];
+            for (int c = 0; c < (stereo ? 2 : 1); ++c)
+            {
+                const float x = c == 0 ? l : r;
+                const float lo = xLow1b.process (xLow1a.process (x, c), c);
+                const float rest = xHigh1b.process (xHigh1a.process (x, c), c);
+                const float mid = xLow2b.process (xLow2a.process (rest, c), c);
+                const float hi = xHigh2b.process (xHigh2a.process (rest, c), c);
+                const float loAligned = apLowB.process (apLowA.process (lo, c), c) + apHighB.process (apHighA.process (lo, c), c);
+                float* dst = c == 0 ? bl : br;
+                dst[0] = loAligned; dst[1] = mid; dst[2] = hi;
+            }
+            if (! stereo) for (int k = 0; k < 3; ++k) br[k] = bl[k];
+            float yl = 0, yr = 0;
+            for (int k = 0; k < 3; ++k)
+            {
+                const float det = std::max (std::abs (bl[k]), std::abs (br[k]));
+                bandEnv[k] = det > bandEnv[k] ? bandAtt * bandEnv[k] + (1 - bandAtt) * det : bandRel * bandEnv[k] + (1 - bandRel) * det;
+                bandRms[k] = bandRmsCoef * bandRms[k] + (1 - bandRmsCoef) * det * det;
+                const float over = gainToDb (bandEnv[k]) - (10.0f * std::log10 (bandRms[k] + 1.0e-12f) + 3.0f);
+                const float want = over > 0 ? std::min (4.0f, 0.5f * over) * glue : 0.0f;
+                bandGr[k] = bandGrSmooth * bandGr[k] + (1 - bandGrSmooth) * want;
+                const float g = dbToGain (-bandGr[k]);
+                yl += bl[k] * g; yr += br[k] * g;
+            }
+            // crossfade so switching the mastering on/off never clicks
+            l += glue * (yl - l);
+            r += glue * (yr - r);
+        }
+
         l *= trim * drive; r *= trim * drive;
 
-        // True-peak estimate (4-tap interpolation of the inter-sample point) on the incoming signal.
+        // ---- Mastering: soft clipper in front of the limiter (only the sharpest peaks, smooth knee).
+        const float clipAmt = sClip.getNextValue();
+        if (clipAmt > 1.0e-4f)
+        {
+            const float knee = ceil * dbToGain (-3.0f * clipAmt), top = ceil * dbToGain (0.5f);
+            auto soft = [&] (float x)
+            {
+                const float ax = std::abs (x);
+                if (ax <= knee) return x;
+                const float y = knee + (top - knee) * std::tanh ((ax - knee) / (top - knee));
+                blockClip = std::max (blockClip, ax / y);
+                return x < 0 ? -y : y;
+            };
+            l = soft (l); r = soft (r);
+        }
+
+        // ---- Mastering: band-limit just below Nyquist (the clipper and saturation fold energy up there).
+        if (glue > 1.0e-4f)
+        {
+            l = nyqB.process (nyqA.process (l, 0), 0);
+            r = stereo ? nyqB.process (nyqA.process (r, 1), 1) : l;
+        }
+
+        // True-peak estimate: 4x oversampled (polyphase FIR) on the incoming signal.
         float pk = std::max (std::abs (l), std::abs (r));
         for (int c = 0; c < (stereo ? 2 : 1); ++c)
         {
-            const float x = c == 0 ? l : r;
-            const float mid = 0.5625f * (hist[c][1] + hist[c][2]) - 0.0625f * (hist[c][0] + x);
-            pk = std::max (pk, std::abs (mid));
-            hist[c][0] = hist[c][1]; hist[c][1] = hist[c][2]; hist[c][2] = x;
+            tpHist[c][tpPos] = c == 0 ? l : r;
+            for (int ph = 0; ph < 4; ++ph)
+            {
+                float acc = 0;
+                int idx = tpPos;
+                for (int k = 0; k < tpTaps; ++k)
+                {
+                    acc += tpCoef[ph][k] * tpHist[c][idx];
+                    if (--idx < 0) idx = tpTaps - 1;
+                }
+                pk = std::max (pk, std::abs (acc));
+            }
         }
-        const float req = pk > ceil ? ceil / pk : 1.0f;
+        if (++tpPos >= tpTaps) tpPos = 0;
+        const float tpCeil = ceil * 0.977f;   // -0.2 dB detector margin for the residual inter-sample error
+        const float req = pk > tpCeil ? tpCeil / pk : 1.0f;
 
         // Sliding minimum of the required gain over the look-ahead window (monotonic queue).
         // The slot being reused holds the sample that just left the window: expire it first.
@@ -341,8 +478,13 @@ void FinishDSP::processChunk (float* L, float* R, int n, const Settings& s, doub
         minQueue[(size_t) qTail] = slot; qTail = (qTail + 1) % Q;
         const float gmin = reqGain[(size_t) minQueue[(size_t) qHead]];
 
-        if (gmin < limGain) limGain = gmin + (limGain - gmin) * limAtt;
-        else                limGain = limRel * limGain + (1 - limRel) * gmin;
+        // Held minimum -> moving average (linear ramp, fully down before the peak leaves the look-ahead)
+        rampSum += (double) gmin - (double) rampBuf[(size_t) rampPos];
+        rampBuf[(size_t) rampPos] = gmin;
+        if (++rampPos >= rampLen) rampPos = 0;
+        const float ramped = std::min (1.0f, (float) (rampSum / rampLen));
+        if (ramped < limGain) limGain = ramped;
+        else                  limGain = limRel * limGain + (1 - limRel) * ramped;
 
         // Delay lines (signal + dry), read the sample that entered `lookahead` samples ago.
         laBuf[0][(size_t) laPos] = l; laBuf[1][(size_t) laPos] = r;
@@ -387,5 +529,7 @@ void FinishDSP::processChunk (float* L, float* R, int n, const Settings& s, doub
     }
 
     grDb.store (std::max (grDb.load(), blockGr));
+    clipOut.store (gainToDb (blockClip));
+    for (int k = 0; k < 3; ++k) bandGrOut[(size_t) k].store (bandGr[k]);
     truePeakDb.store (std::max (truePeakDb.load(), gainToDb (blockTp)));
 }

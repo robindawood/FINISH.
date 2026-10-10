@@ -31,6 +31,11 @@ public:
         float trimDb = 0.0f;         // FINISH MY TRACK level move (dips, fades, silence beats)
         float sectionDry = 0.0f;     // 1 = "Keep Original": untouched audio
         CreativeFX fx;
+        // Mastering stage (after the creative chain, before the limiter)
+        float glue = 0.0f;           // 0..1 three-band leveller (tames band peaks, keeps the balance)
+        float clip = 0.0f;           // 0..1 soft clipper in front of the limiter (shaves transients cleanly)
+        float eqLowDb = 0.0f;        // tonal balance correction, low shelf 110 Hz
+        float eqHighDb = 0.0f;       // tonal balance correction, high shelf 9 kHz
         double bpm = 120.0;          // host tempo (for gate / echo)
         double ppq = -1.0;           // host position in quarter notes at block start (-1 = free running)
     };
@@ -49,6 +54,9 @@ public:
     float getTruePeakDb() const noexcept         { return truePeakDb.load(); }
     float getMatchGainDb() const noexcept        { return matchDb.load(); }
     float getLoudnessCorrectionDb() const noexcept { return corrDbOut.load(); }
+    // Per-band leveller gain reduction (dB) for low / mid / high, and clipper activity (dB shaved).
+    float getBandGrDb (int band) const noexcept { return bandGrOut[(size_t) juce::jlimit (0, 2, band)].load(); }
+    float getClipDb() const noexcept { return clipOut.load(); }
 
     static constexpr float defaultCeilingDb = -1.0f;
     static constexpr float ceilingDb = defaultCeilingDb;   // kept for older callers / tests
@@ -106,6 +114,25 @@ private:
     juce::Reverb reverb;
     std::vector<float> wetL, wetR, dryL, dryR;
 
+    // Mastering: tonal balance shelves, 3-band leveller (Linkwitz-Riley 4th order splits), soft clipper
+    Biquad mEqLow, mEqHigh, nyqA, nyqB;   // nyq*: removes energy right below Nyquist (it makes unpredictable inter-sample peaks)
+    float lastEqLow = 1000.0f, lastEqHigh = 1000.0f;
+    juce::SmoothedValue<float> sEqLow, sEqHigh, sGlue, sClip;
+    Biquad xLow1a, xLow1b, xHigh1a, xHigh1b;          // split 1 (120 Hz)
+    Biquad xLow2a, xLow2b, xHigh2a, xHigh2b;          // split 2 (4 kHz) on the upper part
+    Biquad apLowA, apLowB, apHighA, apHighB;          // allpass (LP4 + HP4 at 4 kHz) on the low band
+    float bandEnv[3] {}, bandRms[3] {}, bandGr[3] {};
+    float bandAtt = 0, bandRel = 0, bandRmsCoef = 0, bandGrSmooth = 0;
+    int eqCounter = 0;
+    std::array<std::atomic<float>, 3> bandGrOut {};
+    std::atomic<float> clipOut { 0.0f };
+
+    // 4x oversampled true-peak detection (polyphase FIR, 12 taps per phase)
+    static constexpr int tpTaps = 32;
+    float tpCoef[4][tpTaps] {};
+    float tpHist[2][tpTaps] {};
+    int tpPos = 0;
+
     // Look-ahead true-peak limiter (+ matching dry delay)
     int lookahead = 64;
     std::vector<float> laBuf[2], dryDelay[2];
@@ -113,8 +140,10 @@ private:
     std::vector<int> minQueue;           // monotonic queue (ring positions) for the sliding minimum
     int qHead = 0, qTail = 0;
     int laPos = 0;
-    float hist[2][3] {};
     float limGain = 1.0f, limAtt = 0, limRel = 0;
+    std::vector<float> rampBuf;          // moving average of the held minimum (linear attack ramp)
+    double rampSum = 0.0;
+    int rampPos = 0, rampLen = 1;
 
     // Loudness meters + A/B match
     KWeighting kIn, kOut;

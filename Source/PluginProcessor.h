@@ -126,6 +126,8 @@ public:
     int getTargetIndex() const noexcept;
     float getSongLoudness() const noexcept;           // analysed (or live long-term) LUFS of the song
     float getAutoDriveDb() const noexcept { return autoDriveDb.load(); }
+    float getAutoEqLow() const noexcept { return autoEqLow.load(); }
+    float getAutoEqHigh() const noexcept { return autoEqHigh.load(); }
     float computeDriveFor (float targetLufs) const noexcept;
     double getHostBpm() const noexcept { return hostBpm.load(); }
     static constexpr float limiterEfficiency = 0.75f;
@@ -153,7 +155,7 @@ private:
     std::atomic<float>* pWidth = nullptr;  std::atomic<float>* pWarmth = nullptr; std::atomic<float>* pLoud = nullptr;
     std::atomic<float>* pBypass = nullptr; std::atomic<float>* pMatch = nullptr; std::atomic<float>* pCoherence = nullptr;
     std::atomic<float>* pTarget = nullptr; std::atomic<float>* pCeiling = nullptr;
-    std::atomic<float> autoDriveDb { 0.0f }, liveFx { 0.0f };
+    std::atomic<float> autoDriveDb { 0.0f }, liveFx { 0.0f }, autoEqLow { 0.0f }, autoEqHigh { 0.0f };
     std::atomic<double> hostBpm { 120.0 };
     float liveSongLufs = -70.0f;
     void updateAutoDrive();

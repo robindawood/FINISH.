@@ -233,6 +233,118 @@ static void testStrategies()
     CHECK (same, "offline render is not deterministic");
 }
 
+// True peak of a buffer: 8x oversampled with a long windowed sinc (independent of the plugin's own detector).
+static float truePeakDb (const juce::AudioBuffer<float>& b)
+{
+    constexpr int L = 8, half = 32;
+    std::vector<float> h ((size_t) (2 * half * L + 1));
+    for (int n = -half * L; n <= half * L; ++n)
+    {
+        const double x = (double) n / L;
+        const double sinc = n == 0 ? 1.0 : std::sin (juce::MathConstants<double>::pi * x) / (juce::MathConstants<double>::pi * x);
+        const double w = 0.5 + 0.5 * std::cos (juce::MathConstants<double>::pi * n / (half * L + 1));
+        h[(size_t) (n + half * L)] = (float) (sinc * w);
+    }
+    float peak = 0;
+    for (int ch = 0; ch < b.getNumChannels(); ++ch)
+    {
+        const float* x = b.getReadPointer (ch);
+        for (int i = half; i + half < b.getNumSamples(); ++i)
+            for (int ph = 0; ph < L; ++ph)
+            {
+                float acc = 0;
+                for (int k = -half + 1; k <= half; ++k) acc += x[i + k] * h[(size_t) ((-k) * L + ph + half * L)];
+                peak = std::max (peak, std::abs (acc));
+            }
+    }
+    return juce::Decibels::gainToDecibels (peak);
+}
+
+// Reference true peak: exact band-limited 8x upsampling via FFT zero padding.
+static float truePeakFftDb (const juce::AudioBuffer<float>& b)
+{
+    const int order = 17, n = 1 << order, up = 8, nUp = n * up;
+    juce::dsp::FFT fwd (order), inv (order + 3);
+    float peak = 0;
+    for (int ch = 0; ch < b.getNumChannels(); ++ch)
+    {
+        std::vector<juce::dsp::Complex<float>> x ((size_t) n), X ((size_t) n), Y ((size_t) nUp, { 0, 0 }), y ((size_t) nUp);
+        for (int i = 0; i < n; ++i) x[(size_t) i] = { i < b.getNumSamples() ? b.getSample (ch, i) : 0.0f, 0.0f };
+        fwd.perform (x.data(), X.data(), false);
+        for (int k = 0; k < n / 2; ++k) { Y[(size_t) k] = X[(size_t) k]; Y[(size_t) (nUp - n / 2 + k)] = X[(size_t) (n / 2 + k)]; }
+        inv.perform (Y.data(), y.data(), true);
+        for (int i = up * 2000; i < nUp - up * 2000; ++i) peak = std::max (peak, std::abs (y[(size_t) i].real()) * (float) up);
+    }
+    return juce::Decibels::gainToDecibels (peak);
+}
+
+// The plugin's detector design, reproduced (24 taps x 4 phases, Kaiser 9, cut-off 1.1 x Nyquist).
+static float pluginDetectorDb (const juce::AudioBuffer<float>& b, int T = 24, double beta = 9.0, double fcut = 1.1)
+{
+    constexpr int L = 4;
+    const int N = T * L;
+    std::vector<double> h ((size_t) N);
+    auto bessel0 = [] (double x) { double sum = 1, t = 1; for (int k = 1; k < 25; ++k) { t *= (x / (2 * k)) * (x / (2 * k)); sum += t; } return sum; };
+    for (int n = 0; n < N; ++n)
+    {
+        const double m = n - (N - 1) / 2.0, x = m / L, ax = juce::MathConstants<double>::pi * x * fcut;
+        const double sinc = std::abs (x) < 1.0e-12 ? 1.0 : std::sin (ax) / ax;
+        const double r = 2.0 * n / (N - 1) - 1.0;
+        h[(size_t) n] = sinc * bessel0 (beta * std::sqrt (std::max (0.0, 1.0 - r * r))) / bessel0 (beta);
+    }
+    std::vector<std::vector<float>> c (L, std::vector<float> ((size_t) T));
+    for (int ph = 0; ph < L; ++ph) { double sum = 0; for (int k = 0; k < T; ++k) sum += h[(size_t) (k * L + ph)]; for (int k = 0; k < T; ++k) c[(size_t) ph][(size_t) k] = (float) (h[(size_t) (k * L + ph)] / sum); }
+    float peak = 0;
+    for (int ch = 0; ch < b.getNumChannels(); ++ch)
+        for (int i = T; i < b.getNumSamples(); ++i)
+        {
+            peak = std::max (peak, std::abs (b.getSample (ch, i)));
+            for (int ph = 0; ph < L; ++ph) { float acc = 0; for (int k = 0; k < T; ++k) acc += c[(size_t) ph][(size_t) k] * b.getSample (ch, i - k); peak = std::max (peak, std::abs (acc)); }
+        }
+    return juce::Decibels::gainToDecibels (peak);
+}
+
+static void testTruePeakDetector()
+{
+    std::cout << "DSP: inter-sample peaks are caught (sine at fs/4, 45 degrees: true peak 3 dB above the samples)\n";
+    for (double f : { 12000.0, 11000.0, 7000.0, 15000.0, 19000.0, 21000.0, 23000.0 })
+    {
+        const double sr = 48000.0;
+        juce::AudioBuffer<float> b (2, (int) sr * 2);
+        const float amp = juce::Decibels::decibelsToGain (1.0f);   // true peak +1 dBTP
+        for (int i = 0; i < b.getNumSamples(); ++i)
+            for (int ch = 0; ch < 2; ++ch)
+                b.setSample (ch, i, amp * (float) std::sin (2.0 * juce::MathConstants<double>::pi * f * i / sr + juce::MathConstants<double>::pi / 4));
+        const float inTp = truePeakDb (b);
+        FinishDSP dsp; dsp.prepare (sr, 512, 2);
+        FinishDSP::Settings s;
+        if (std::getenv ("TPDRIVE")) s.driveDb = (float) std::atof (std::getenv ("TPDRIVE"));
+        if (std::getenv ("TPGLUE")) s.glue = 0.7f;
+        runDSP (dsp, b, s);
+        juce::AudioBuffer<float> tail (2, (int) sr);
+        for (int ch = 0; ch < 2; ++ch) tail.copyFrom (ch, 0, b, ch, (int) sr, (int) sr);
+        const float outTp = truePeakDb (tail);
+        std::cout << "  " << f << " Hz: in " << inTp << " dBTP -> out " << outTp << " dBTP\n";
+        CHECK (outTp <= FinishDSP::defaultCeilingDb + 0.3f, "inter-sample peak not caught at " + juce::String (f));
+    }
+}
+
+static void testLimiterOnMusic()
+{
+    std::cout << "DSP: limiter alone on dense music, +12 dB drive\n";
+    MixOptions o; o.seconds = 20; o.arrangement = false; o.levelDb = -6.0f;
+    auto out = makeMix (o);
+    FinishDSP dsp; dsp.prepare (o.sr, 512, 2);
+    FinishDSP::Settings s; s.driveDb = 12.0f;
+    if (std::getenv ("LIMGLUE")) s.glue = 0.7f;
+    if (std::getenv ("LIMCLIP")) s.clip = 0.6f;
+    runDSP (dsp, out, s);
+    juce::AudioBuffer<float> part (2, (int) (o.sr * 6));
+    for (int ch = 0; ch < 2; ++ch) part.copyFrom (ch, 0, out, ch, (int) (o.sr * 10), part.getNumSamples());
+    std::cout << "  sample peak " << juce::Decibels::gainToDecibels (part.getMagnitude (0, part.getNumSamples())) << "  TP " << truePeakDb (part)
+              << "  detector " << pluginDetectorDb (part) << "\n";
+}
+
 static void testLoudnessTargets()
 {
     std::cout << "DSP: mastering targets reach their loudness under the true-peak ceiling\n";
@@ -248,6 +360,7 @@ static void testLoudnessTargets()
                 FinishDSP dsp; dsp.prepare (o.sr, 512, 2);
                 FinishDSP::Settings s; s.autoLoudness = true; s.targetLufs = target; s.ceilingDb = ceiling;
                 s.macros = { 1.0f, 0.3f, 0.3f, 0.5f, 0.5f, 0.3f };
+                s.glue = std::getenv ("NOGLUE") ? 0.0f : 0.7f; s.clip = std::getenv ("NOCLIP") ? 0.0f : (target > -10.0f ? 0.65f : 0.4f);   // the processor's mastering stage
                 // open-loop guess like the processor does (limiter efficiency 0.75)
                 const float wanted = target - fin.integratedLufs, headroom = ceiling - fin.peakDb;
                 s.driveDb = wanted <= headroom ? wanted : headroom + (wanted - headroom) / 0.75f;
@@ -255,11 +368,21 @@ static void testLoudnessTargets()
                 const auto fo = measure (out, o.sr, (int) (o.sr * 20));
                 const float peakDb = juce::Decibels::gainToDecibels (out.getMagnitude (0, out.getNumSamples()));
                 std::cout << "  in " << fin.integratedLufs << " -> target " << target << " / ceiling " << ceiling
-                          << ": out " << fo.integratedLufs << " LUFS, peak " << peakDb << ", correction "
+                          << ": out " << fo.integratedLufs << " LUFS, peak " << juce::String (peakDb, 3) << ", correction "
                           << dsp.getLoudnessCorrectionDb() << " dB\n";
                 CHECK (std::abs (fo.integratedLufs - target) < 1.5f, "target " + juce::String (target) + " missed from " + juce::String (inLevel));
                 CHECK (peakDb <= ceiling + 0.01f, "ceiling " + juce::String (ceiling) + " exceeded");
                 CHECK (allFinite (out), "NaN in loudness target test");
+                if (inLevel > -10.0f && ceiling < -0.5f)
+                {
+                    juce::AudioBuffer<float> part (2, (int) (o.sr * 6));
+                    for (int ch = 0; ch < 2; ++ch) part.copyFrom (ch, 0, out, ch, (int) (o.sr * 30), part.getNumSamples());
+                    const float tp = truePeakDb (part);
+                    const float tpRef = truePeakFftDb (part);
+                    CHECK (tpRef <= ceiling + 0.15f, "true peak (FFT reference) above the ceiling: " + juce::String (tpRef));
+                    std::cout << "      true peak (8x) " << tp << " dBTP, band GR " << dsp.getBandGrDb (0) << "/" << dsp.getBandGrDb (1) << "/" << dsp.getBandGrDb (2) << "\n";
+                    CHECK (tp <= ceiling + 0.15f, "true peak above the ceiling: " + juce::String (tp));
+                }
             }
     }
 }
@@ -887,6 +1010,8 @@ int main (int argc, char** argv)
 
     testTransparency();
     testStrategies();
+    testTruePeakDetector();
+    testLimiterOnMusic();
     testLoudnessTargets();
     testCreativeFx();
     testSampleRates();
