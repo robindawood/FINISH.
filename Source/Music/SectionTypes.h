@@ -7,21 +7,53 @@
 
 // Offsets added on top of the global FINISH controls while a section/transition edit is active.
 // impact/punch/loudness: 0..1 deltas, width/warmth: deltas around neutral 0.5, trimDb: level change in dB.
+// hp/lp/gate/echo/space: creative FX amounts 0..1 (filter sweeps, trance gate, echo throw, reverb throw).
 struct SectionMacros
 {
     float impact = 0, punch = 0, width = 0, warmth = 0, loudness = 0, trimDb = 0;
+    float hp = 0, lp = 0, gate = 0, echo = 0, space = 0;
 
-    SectionMacros scaled (float k) const noexcept { return { impact * k, punch * k, width * k, warmth * k, loudness * k, trimDb * k }; }
+    static constexpr int numValues = 11;
+    float* values() noexcept { return &impact; }
+    const float* values() const noexcept { return &impact; }
+
+    SectionMacros scaled (float k) const noexcept
+    {
+        SectionMacros r;
+        for (int i = 0; i < numValues; ++i) r.values()[i] = values()[i] * k;
+        return r;
+    }
     SectionMacros& operator+= (const SectionMacros& o) noexcept
     {
-        impact += o.impact; punch += o.punch; width += o.width; warmth += o.warmth; loudness += o.loudness; trimDb += o.trimDb;
+        for (int i = 0; i < numValues; ++i) values()[i] += o.values()[i];
         return *this;
     }
     static SectionMacros lerp (const SectionMacros& a, const SectionMacros& b, float t) noexcept
     {
-        return { a.impact + (b.impact - a.impact) * t, a.punch + (b.punch - a.punch) * t, a.width + (b.width - a.width) * t,
-                 a.warmth + (b.warmth - a.warmth) * t, a.loudness + (b.loudness - a.loudness) * t, a.trimDb + (b.trimDb - a.trimDb) * t };
+        SectionMacros r;
+        for (int i = 0; i < numValues; ++i) r.values()[i] = a.values()[i] + (b.values()[i] - a.values()[i]) * t;
+        return r;
     }
+    bool hasFx() const noexcept { return hp + lp + gate + echo + space > 1.0e-4f; }
+};
+static_assert (sizeof (SectionMacros) == SectionMacros::numValues * sizeof (float), "SectionMacros must stay a flat float block");
+
+// Builder for readable variant definitions.
+struct FX
+{
+    SectionMacros m;
+    FX& impact (float v)   { m.impact = v; return *this; }
+    FX& punch (float v)    { m.punch = v; return *this; }
+    FX& width (float v)    { m.width = v; return *this; }
+    FX& warmth (float v)   { m.warmth = v; return *this; }
+    FX& loud (float v)     { m.loudness = v; return *this; }
+    FX& trim (float v)     { m.trimDb = v; return *this; }
+    FX& hp (float v)       { m.hp = v; return *this; }
+    FX& lp (float v)       { m.lp = v; return *this; }
+    FX& gate (float v)     { m.gate = v; return *this; }
+    FX& echo (float v)     { m.echo = v; return *this; }
+    FX& space (float v)    { m.space = v; return *this; }
+    operator SectionMacros() const { return m; }
 };
 
 // Where an edit lives, relative to the detected sections (survives marker edits).

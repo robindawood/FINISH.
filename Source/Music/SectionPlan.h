@@ -48,6 +48,8 @@ struct SectionPlan
         layer.delta.warmth   = sum.warmth   * (1 - k) + mean.warmth   * k;
         layer.delta.loudness = sum.loudness * (1 - k) + mean.loudness * k;
         layer.delta.trimDb   = sum.trimDb;
+        layer.delta.hp = sum.hp; layer.delta.lp = sum.lp; layer.delta.gate = sum.gate;
+        layer.delta.echo = sum.echo; layer.delta.space = sum.space;
         return layer;
     }
 };

@@ -395,9 +395,8 @@ namespace
 {
     void writeMacros (juce::ValueTree& t, const char* prefix, const SectionMacros& m)
     {
-        const float v[] = { m.impact, m.punch, m.width, m.warmth, m.loudness, m.trimDb };
         juce::String s;
-        for (float x : v) s << juce::String (x, 4) << " ";
+        for (int i = 0; i < SectionMacros::numValues; ++i) s << juce::String (m.values()[i], 4) << " ";
         t.setProperty (prefix, s.trim(), nullptr);
     }
     SectionMacros readMacros (const juce::ValueTree& t, const char* prefix)
@@ -405,8 +404,7 @@ namespace
         juce::StringArray parts;
         parts.addTokens (t[prefix].toString(), " ", "");
         SectionMacros m;
-        float* f[] = { &m.impact, &m.punch, &m.width, &m.warmth, &m.loudness, &m.trimDb };
-        for (int i = 0; i < 6 && i < parts.size(); ++i) *f[i] = parts[i].getFloatValue();
+        for (int i = 0; i < SectionMacros::numValues && i < parts.size(); ++i) m.values()[i] = parts[i].getFloatValue();
         return m;
     }
     constexpr int floatsPerFrame = 12;

@@ -1,5 +1,6 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
+#include "Compose/MusicAnalyzer.h"
 
 FINISHAudioProcessor::FINISHAudioProcessor()
     : AudioProcessor (BusesProperties().withInput ("Input", juce::AudioChannelSet::stereo(), true)
@@ -15,6 +16,8 @@ FINISHAudioProcessor::FINISHAudioProcessor()
     pBypass = params.getRawParameterValue (ParamIDs::bypass);
     pMatch  = params.getRawParameterValue (ParamIDs::match);
     pCoherence = params.getRawParameterValue (ParamIDs::coherence);
+    pTarget = params.getRawParameterValue (ParamIDs::target);
+    pCeiling = params.getRawParameterValue (ParamIDs::ceiling);
 
     sampleRing.assign ((size_t) fftSize, 0.0f);
     fftData.assign ((size_t) fftSize * 2, 0.0f);
@@ -46,7 +49,10 @@ void FINISHAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock
     dsp.prepare (sampleRate, samplesPerBlock, juce::jmax (1, getTotalNumOutputChannels()));
     layerSmoothed = {};
     keepSmoothed = 0;
-    setLatencySamples (0);
+    capture.prepare (sampleRate);
+    preview.prepare (sampleRate, samplesPerBlock);
+    previewSeqVersion = -1;
+    setLatencySamples (dsp.getLatencySamples());
 }
 
 MacroSettings FINISHAudioProcessor::getCurrentMacros() const
@@ -67,13 +73,16 @@ void FINISHAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
     if (buffer.getNumChannels() == 0 || n == 0) return;
 
     bool playing = false, timeValid = false;
-    double songTime = 0.0;
+    double songTime = 0.0, bpm = 120.0, ppq = -1.0;
     if (auto* ph = getPlayHead())
         if (auto pos = ph->getPosition())
         {
             playing = pos->getIsPlaying();
             if (auto t = pos->getTimeInSeconds()) { songTime = *t; timeValid = true; }
+            if (auto b = pos->getBpm()) bpm = *b;
+            if (auto q = pos->getPpqPosition()) ppq = *q;
         }
+    hostBpm.store (bpm);
     hostPlaying.store (playing);
     hostTimeValid.store (timeValid);
     if (timeValid) hostTime.store (songTime);
@@ -82,6 +91,14 @@ void FINISHAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
     analyzer.process (buffer.getReadPointer (0),
                       buffer.getNumChannels() > 1 ? buffer.getReadPointer (1) : nullptr,
                       n, playing && timeValid ? songTime : -1.0);
+    // What was played, on the song timeline, for the musical analysis (key, groove, melody...).
+    capture.push (buffer.getReadPointer (0), buffer.getNumChannels() > 1 ? buffer.getReadPointer (1) : nullptr,
+                  n, timeValid ? songTime : -1.0, ppq, bpm, playing);
+
+    // Preview of generated parts: replaces (solo) or joins the input, then goes through the master chain.
+    const bool previewing = preview.isPlaying();
+    if (previewing && previewSolo.load()) buffer.clear();
+    preview.render (buffer.getWritePointer (0), buffer.getNumChannels() > 1 ? buffer.getWritePointer (1) : nullptr, n, previewBpm.load());
 
     // FINISH MY TRACK: pick up a new section plan if one is waiting (never blocks).
     if (planVersion.load() != audioPlanVersion)
@@ -91,7 +108,8 @@ void FINISHAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
     }
 
     SectionPlan::Layer target;
-    if (timeValid && audioPlan.count > 0)
+    if (previewing && previewSolo.load()) {}      // the preview is not the song: no section moves on it
+    else if (timeValid && audioPlan.count > 0)
         target = audioPlan.evaluate (songTime + 0.5 * n / currentSampleRate.load(), pCoherence->load());
     else if (audioPlan.count > 0)
         target.delta = audioPlan.mean.scaled (0.6f * pCoherence->load());
@@ -102,6 +120,7 @@ void FINISHAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
     keepSmoothed = target.keepOriginal + (keepSmoothed - target.keepOriginal) * a;
     liveImpact = layerSmoothed.impact; livePunch = layerSmoothed.punch; liveWidth = layerSmoothed.width;
     liveWarmth = layerSmoothed.warmth; liveLoud = layerSmoothed.loudness; liveTrim = layerSmoothed.trimDb;
+    liveFx.store (layerSmoothed.hp + layerSmoothed.lp + layerSmoothed.gate + layerSmoothed.echo + layerSmoothed.space);
 
     FinishDSP::Settings s;
     s.macros = getCurrentMacros();
@@ -112,14 +131,57 @@ void FINISHAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
     s.macros.loudness = juce::jlimit (0.0f, 1.0f, s.macros.loudness + layerSmoothed.loudness);
     s.trimDb = layerSmoothed.trimDb;
     s.sectionDry = keepSmoothed;
+    s.fx = { layerSmoothed.hp, layerSmoothed.lp, layerSmoothed.gate, layerSmoothed.echo, layerSmoothed.space };
+    s.bpm = bpm;
+    s.ppq = ppq;
     s.bypass = pBypass->load() > 0.5f;
-    s.levelMatch = pMatch->load() > 0.5f;
+    s.matchAB = pMatch->load() > 0.5f;
+    s.ceilingDb = pCeiling->load();
+    // Mastering drive: from the loudness target when one is chosen, else the manual LOUDNESS knob.
+    const int targetIdx = getTargetIndex();
+    s.driveDb = targetIdx > 0 ? autoDriveDb.load() : s.macros.loudness * s.macros.amount * 10.0f;
+    s.autoLoudness = targetIdx > 0;
+    s.targetLufs = loudnessTargets[targetIdx].lufs;
     dsp.process (buffer, s);
 }
 
 SectionMacros FINISHAudioProcessor::getLiveSectionLayer() const noexcept
 {
     return { liveImpact.load(), livePunch.load(), liveWidth.load(), liveWarmth.load(), liveLoud.load(), liveTrim.load() };
+}
+
+int FINISHAudioProcessor::getTargetIndex() const noexcept
+{
+    return juce::jlimit (0, numLoudnessTargets - 1, (int) pTarget->load());
+}
+
+float FINISHAudioProcessor::getSongLoudness() const noexcept
+{
+    return features.valid ? features.integratedLufs : liveSongLufs;
+}
+
+// Open-loop drive into the limiter: reach the target integrated loudness from the song's measured loudness.
+// Below the limiter threshold every dB of drive is a dB of loudness; above it the limiter absorbs part of it.
+float FINISHAudioProcessor::computeDriveFor (float targetLufs) const noexcept
+{
+    const float song = getSongLoudness();
+    if (song < -60.0f) return 0.0f;
+    const float ceiling = pCeiling->load();
+    const float peak = features.valid ? features.peakDb : song + 12.0f;
+    const float wanted = targetLufs - song;
+    const float headroom = ceiling - peak;
+    float drive = wanted <= headroom ? wanted : headroom + (wanted - headroom) / limiterEfficiency;
+    return juce::jlimit (-12.0f, 30.0f, drive);
+}
+
+void FINISHAudioProcessor::updateAutoDrive()
+{
+    // Long-term input loudness while playing (used before an analysis exists).
+    const float in = dsp.getInputLoudness();
+    if (hostPlaying.load() && in > -50.0f)
+        liveSongLufs = liveSongLufs < -60.0f ? in : liveSongLufs + (in - liveSongLufs) / 600.0f;
+    const int t = getTargetIndex();
+    autoDriveDb.store (t > 0 ? computeDriveFor (loudnessTargets[t].lufs) : 0.0f);
 }
 
 juce::AudioProcessorParameter* FINISHAudioProcessor::getBypassParameter() const
@@ -137,8 +199,19 @@ void FINISHAudioProcessor::timerCallback()
     {
         const int got = analyzer.readFrames (frameScratch.data(), (int) frameScratch.size());
         if (got == 0) break;
-        if (analysisState == AnalysisState::Listening)
-            for (int i = 0; i < got; ++i) session.add (frameScratch[(size_t) i]);
+        for (int i = 0; i < got; ++i)
+        {
+            const auto& f = frameScratch[(size_t) i];
+            if (analysisState == AnalysisState::Listening) session.add (f);
+            // Always remember the last stretch played: FINISH MY TRACK can use it at once.
+            if (f.hostTime >= 0.0)
+            {
+                if (recentLastTime >= 0.0 && (f.hostTime < recentLastTime - 0.05 || f.hostTime > recentLastTime + 0.6))
+                    recent.clear();
+                recent.add (f);
+                recentLastTime = f.hostTime + f.seconds;
+            }
+        }
     }
 
     if (analysisState == AnalysisState::Listening)
@@ -150,7 +223,37 @@ void FINISHAudioProcessor::timerCallback()
             finishAnalysis();
     }
 
+    // Musical analysis finished on the worker?
+    {
+        ComposeJobResult r;
+        {
+            const juce::ScopedLock sl (composeLock);
+            if (composeResult.ready) { r = composeResult; composeResult = {}; }
+        }
+        if (r.ready)
+        {
+            composing = false;
+            if (r.dna.valid)
+            {
+                composer.setDNA (r.dna, r.userBar, (juce::uint32) juce::Random::getSystemRandom().nextInt (1 << 30) + 1u);
+                afterCompose();
+            }
+            else
+            {
+                statusMessage = utf8 ("Pas assez de musique pour composer : joue au moins 4 mesures (un drop, une boucle ou une mélodie).");
+                ++resultVersion;
+            }
+        }
+    }
+    if (composer.pollLive())
+    {
+        statusMessage = composer.getLiveStatus();
+        ++resultVersion;
+    }
+    refreshPreviewSequence();
+
     updateSpectrum();
+    updateAutoDrive();
 
     // Reference analysis finished on the worker thread?
     std::unique_ptr<ReferenceProfile> ready;
@@ -228,24 +331,187 @@ void FINISHAudioProcessor::cancelAnalysis()
 
 void FINISHAudioProcessor::finishAnalysis()
 {
-    if (session.getDuration() < 3.0)
+    finishAnalysisFrom (session);
+    session.clear();
+}
+
+void FINISHAudioProcessor::finishAnalysisFrom (const AnalysisSession& source)
+{
+    if (source.getDuration() < 3.0)
     {
         analysisState = features.valid ? AnalysisState::Ready : AnalysisState::Idle;
-        statusMessage = "Not enough audio. Play at least a few seconds (ideally the whole track) while FINISH is listening.";
-        session.clear();
+        statusMessage = utf8 ("Pas assez d'audio : joue au moins quelques mesures pendant que FINISH écoute.");
+        composeAfterwards = false;
         ++resultVersion;
         return;
     }
-    features = session.computeFeatures();
-    track.build (session.getFrames());
-    session.clear();
+    const auto frames = source.getFrames();
+    features = AnalysisSession::computeFeatures (frames);
+    track.build (frames);
     analysisState = AnalysisState::Ready;
-    const auto& m = track.getMusic();
-    statusMessage = "Track map ready: " + juce::String ((int) m.sections.size()) + " sections, "
-                  + juce::String ((int) track.getTransitions().size()) + " transitions, "
-                  + juce::String (juce::roundToInt (features.durationSec)) + " s analysed.";
     appliedStrategy = {};
+    const auto& m = track.getMusic();
+    statusMessage = utf8 ("Carte prête : ") + juce::String ((int) m.sections.size()) + " sections, "
+                  + juce::String (juce::roundToInt (features.durationSec)) + utf8 (" s analysées.");
     rebuildDecisions();
+
+    if (! composeAfterwards) return;
+    composeAfterwards = false;
+
+    // 1. Mastering on: a loudness target when the user had none.
+    if ((int) pTarget->load() == 0)
+        if (auto* t = params.getParameter (ParamIDs::target))
+        {
+            t->beginChangeGesture();
+            t->setValueNotifyingHost (t->convertTo0to1 (2.0f));   // BALANCED -11 LUFS
+            t->endChangeGesture();
+        }
+
+    // 2. Section moves FINISH is confident about (only on a real song with several parts).
+    if (m.sections.size() >= 3)
+        editTrack ([] (TrackEngine& e)
+        {
+            const auto& v = e.getVerdicts();
+            for (int i = 0; i < (int) v.size(); ++i)
+                if (v[(size_t) i].potential >= 0.5f && e.variantsFor (TrackEngine::Selection::section (i)) != nullptr && e.editFor (TrackEngine::Selection::section (i)) == nullptr)
+                    e.apply (TrackEngine::Selection::section (i), 0, 0.8f);
+            for (auto& t : e.getTransitions())
+                if (! t.works && t.severity >= 0.5f && e.variantsFor (TrackEngine::Selection::transition (t.index)) != nullptr)
+                    e.apply (TrackEngine::Selection::transition (t.index), 0, 0.8f);
+        });
+
+    // 3. The music: analyse the strongest part (the drop if there is one) and write the missing parts.
+    double from = frames.front().hostTime, to = frames.back().hostTime + frames.back().seconds;
+    int best = -1; float bestLoud = -100.0f;
+    for (int i = 0; i < (int) m.sections.size(); ++i)
+        if (m.sections[(size_t) i].length() >= 8.0 && m.sections[(size_t) i].loudness > bestLoud && isPeakType (m.sections[(size_t) i].type))
+            { bestLoud = m.sections[(size_t) i].loudness; best = i; }
+    if (best >= 0) { from = m.sections[(size_t) best].startTime; to = m.sections[(size_t) best].endTime; }
+    if (from >= 0.0) to = std::min (to, from + 120.0);
+    startComposeAnalysis (from, to);
+}
+
+void FINISHAudioProcessor::startComposeAnalysis (double from, double to)
+{
+    auto snap = capture.snapshot (from, to);
+    if (! snap.valid())
+    {
+        statusMessage = utf8 ("FINISH n'a rien enregistré à composer : lance la lecture dans ton DAW, puis FINISH MY TRACK.");
+        ++resultVersion;
+        return;
+    }
+    composing = true;
+    const int userBar = std::max (0, (int) std::ceil (snap.beatAtStart / 4.0 - 1.0e-6));
+    statusMessage = utf8 ("Écoute de ta musique : tempo, tonalité, groove, basse, mélodie...");
+    ++resultVersion;
+    pool.addJob ([this, snap = std::move (snap), userBar]
+    {
+        auto dna = MusicAnalyzer::analyze (snap);
+        const juce::ScopedLock sl (composeLock);
+        composeResult.dna = std::move (dna);
+        composeResult.userBar = userBar;
+        composeResult.ready = true;
+    });
+}
+
+void FINISHAudioProcessor::afterCompose()
+{
+    const auto& d = composer.getDNA();
+    const auto& a = composer.getArrangement();
+    statusMessage = juce::String (styleName (d.style)) + "  " + d.keyName() + "  " + juce::String (d.bpm, 1) + " BPM  |  "
+                  + juce::String ((int) a.sections.size()) + utf8 (" parties, ") + juce::String (a.totalBars()) + utf8 (" mesures. ")
+                  + utf8 ("Écoute avec PLAY, envoie avec SEND TO LIVE.");
+    const auto unsure = d.uncertainties();
+    if (! unsure.isEmpty()) statusMessage << "  (" << unsure[0] << ")";
+    previewSeqVersion = -1;
+    ++resultVersion;
+}
+
+void FINISHAudioProcessor::finishMyTrack()
+{
+    if (composing.load()) return;
+    if (analysisState == AnalysisState::Listening)
+    {
+        composeAfterwards = true;
+        finishAnalysis();
+        return;
+    }
+    // Already played something? Use it right away.
+    if (recent.getDuration() >= 6.0 && capture.getLastRunSeconds() >= 6.0)
+    {
+        composeAfterwards = true;
+        const auto copy = recent;
+        finishAnalysisFrom (copy);
+        return;
+    }
+    composeAfterwards = true;
+    toggleAnalysis();
+    statusMessage = utf8 ("J'écoute : lance la lecture (ton drop, ta boucle ou ta mélodie, 8 mesures ou plus), puis stop.");
+    ++resultVersion;
+}
+
+void FINISHAudioProcessor::editComposer (const std::function<void (Composer&)>& change)
+{
+    change (composer);
+    ++resultVersion;
+}
+
+void FINISHAudioProcessor::refreshPreviewSequence()
+{
+    if (composer.getVersion() == previewSeqVersion) return;
+    previewSeqVersion = composer.getVersion();
+    if (! composer.hasArrangement()) return;
+    previewBpm.store (composer.getDNA().bpm);
+    preview.setSequence (PreviewSynth::compile (composer.getArrangement()));
+}
+
+void FINISHAudioProcessor::previewSection (int sectionIndex, bool loop)
+{
+    if (! composer.hasArrangement()) return;
+    refreshPreviewSequence();
+    const auto& arr = composer.getArrangement();
+    if (sectionIndex < 0 || sectionIndex >= (int) arr.sections.size())
+    {
+        previewSectionIndex = -1;
+        preview.play (0.0, 0.0, loop ? arr.totalBars() * 4.0 : 0.0);
+        return;
+    }
+    const auto& s = arr.sections[(size_t) sectionIndex];
+    previewSectionIndex = sectionIndex;
+    const double a = s.startBar * 4.0, b = a + s.lengthBeats();
+    preview.play (a, loop ? a : 0.0, loop ? b : 0.0);
+}
+
+void FINISHAudioProcessor::stopPreview()
+{
+    preview.stop();
+    previewSectionIndex = -1;
+}
+
+ArrangementExport::Result FINISHAudioProcessor::exportArrangement()
+{
+    auto r = composer.exportAll (currentSampleRate.load());
+    statusMessage = r.ok ? utf8 ("Exporté : ") + r.folder.getFullPathName() : r.error;
+    if (r.ok) r.folder.revealToUser();
+    ++resultVersion;
+    return r;
+}
+
+void FINISHAudioProcessor::sendArrangementToLive()
+{
+    juce::String msg;
+    composer.sendToLive (currentSampleRate.load(), msg);
+    statusMessage = msg;
+    ++resultVersion;
+}
+
+juce::File FINISHAudioProcessor::exportClipForDrag (int section, Lane lane)
+{
+    if (! composer.hasArrangement()) return {};
+    const auto dir = ArrangementExport::defaultRoot().getChildFile ("Drag");
+    const auto& arr = composer.getArrangement();
+    if (lane == Lane::Fx) return ArrangementExport::writeSectionFx (arr, section, dir, currentSampleRate.load());
+    return ArrangementExport::writeClipMidi (arr, section, lane, dir);
 }
 
 void FINISHAudioProcessor::rebuildDecisions()
@@ -278,10 +544,32 @@ void FINISHAudioProcessor::editTrack (const std::function<void (TrackEngine&)>& 
 void FINISHAudioProcessor::setIntent (const juce::String& text)
 {
     intentText = text.trim();
+    const auto cmd = ComposeCommand::parse (intentText);
     auto parsed = IntentParser::parse (intentText);
     intent = parsed.intent;
-    intentUnderstood = parsed.understood;
+    intentUnderstood = cmd.understood;
+    for (auto& u : parsed.understood) intentUnderstood.addIfNotAlreadyThere (u);
     rebuildDecisions();
+
+    if (cmd.isEmpty()) return;
+    if (cmd.masterTarget >= 0)
+        if (auto* t = params.getParameter (ParamIDs::target))
+        {
+            t->beginChangeGesture();
+            t->setValueNotifyingHost (t->convertTo0to1 ((float) cmd.masterTarget));
+            t->endChangeGesture();
+        }
+    auto res = composer.apply (cmd);
+    if (cmd.finishTrack || res.needsMaterial)
+    {
+        finishMyTrack();
+        if (res.needsMaterial && ! composing.load())
+            statusMessage = utf8 ("D'abord la matière : ") + statusMessage;
+        return;
+    }
+    if (! res.done.isEmpty()) statusMessage = res.done.joinIntoString ("  |  ");
+    else if (cmd.masterTarget >= 0) statusMessage = juce::String ("MASTER ") + loudnessTargets[cmd.masterTarget].name;
+    ++resultVersion;
 }
 
 void FINISHAudioProcessor::setMacro (const char* id, float value)
@@ -388,8 +676,10 @@ void FINISHAudioProcessor::getStateInformation (juce::MemoryBlock& dest)
     state.setProperty ("referencePath", reference.valid ? reference.path : juce::String(), nullptr);
     state.setProperty ("applied", appliedStrategy, nullptr);
 
-    for (auto* name : { "ANALYSIS", "TRACKMAP" })
+    for (auto* name : { "ANALYSIS", "TRACKMAP", "COMPOSE" })
         state.removeChild (state.getChildWithName (name), nullptr);
+    if (composer.hasDNA())
+        state.appendChild (composer.toState(), nullptr);
 
     if (features.valid)
     {
@@ -423,7 +713,8 @@ void FINISHAudioProcessor::setStateInformation (const void* data, int size)
 
     auto analysis = state.getChildWithName ("ANALYSIS").createCopy();
     auto map = state.getChildWithName ("TRACKMAP").createCopy();
-    for (auto* name : { "ANALYSIS", "TRACKMAP" })
+    auto compose = state.getChildWithName ("COMPOSE").createCopy();
+    for (auto* name : { "ANALYSIS", "TRACKMAP", "COMPOSE" })
         state.removeChild (state.getChildWithName (name), nullptr);
     params.replaceState (state);
 
@@ -431,8 +722,9 @@ void FINISHAudioProcessor::setStateInformation (const void* data, int size)
     const auto refPath = state.getProperty ("referencePath").toString();
     const auto applied = state.getProperty ("applied").toString();
 
-    auto restore = [this, text, refPath, applied, analysis, map]
+    auto restore = [this, text, refPath, applied, analysis, map, compose]
     {
+        if (compose.isValid()) composer.fromState (compose);
         if (analysis.isValid())
         {
             features = {};
@@ -453,7 +745,12 @@ void FINISHAudioProcessor::setStateInformation (const void* data, int size)
         track.fromValueTree (map);
         if (refPath.isNotEmpty() && refPath != reference.path)
             loadReference (juce::File (refPath));
-        setIntent (text);           // re-ranks everything and publishes the section plan
+        // re-rank everything and publish the section plan (without re-running compose commands)
+        intentText = text;
+        auto parsed = IntentParser::parse (text);
+        intent = parsed.intent;
+        intentUnderstood = parsed.understood;
+        rebuildDecisions();
         appliedStrategy = applied;
     };
 

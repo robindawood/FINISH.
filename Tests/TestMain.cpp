@@ -10,7 +10,8 @@
 #include "Music/SectionDetector.h"
 #include <random>
 
-static int failures = 0, checks = 0;
+int failures = 0, checks = 0;
+void runComposeTests();
 #define CHECK(cond, msg) do { ++checks; if (! (cond)) { ++failures; std::cout << "  FAIL: " << msg << "  (" #cond ")\n"; } } while (0)
 
 // --------------------------------------------------------------------------------------
@@ -162,23 +163,27 @@ static bool allFinite (const juce::AudioBuffer<float>& b)
 
 static void testTransparency()
 {
-    std::cout << "DSP: neutral settings are transparent\n";
+    std::cout << "DSP: neutral settings are transparent (latency-compensated)\n";
     MixOptions o; o.seconds = 10; o.levelDb = -3.0f;   // peak -9 dBFS
     auto in = makeMix (o);
     auto out = in;
     FinishDSP dsp; dsp.prepare (o.sr, 512, 2);
+    const int L = dsp.getLatencySamples();
+    CHECK (L > 0 && L < (int) (o.sr * 0.005), "look-ahead latency out of range");
     runDSP (dsp, out, {});
     float maxDiff = 0;
     for (int ch = 0; ch < 2; ++ch)
-        for (int i = 0; i < in.getNumSamples(); ++i)
-            maxDiff = std::max (maxDiff, std::abs (in.getSample (ch, i) - out.getSample (ch, i)));
-    std::cout << "  max difference " << maxDiff << "\n";
+        for (int i = 0; i + L < in.getNumSamples(); ++i)
+            maxDiff = std::max (maxDiff, std::abs (in.getSample (ch, i) - out.getSample (ch, i + L)));
+    std::cout << "  latency " << L << " samples, max difference " << maxDiff << "\n";
     CHECK (maxDiff < 1.0e-4f, "neutral chain changes the audio");
 }
 
+static float manualDrive (const MacroSettings& m) { return m.loudness * m.amount * 10.0f; }
+
 static void testStrategies()
 {
-    std::cout << "DSP: strategies are safe, deterministic and level-matched\n";
+    std::cout << "DSP: strategies are safe, deterministic, audible; A/B is level-matched\n";
     MixOptions o; o.seconds = 40; o.arrangement = false; o.levelDb = -14.0f;
     const auto in = makeMix (o);
     const auto fin = measure (in, o.sr, (int) (o.sr * 10));
@@ -192,35 +197,33 @@ static void testStrategies()
     };
     for (auto& [name, m] : presets)
     {
-        for (bool match : { true, false })
+        auto out = in, ab = in;
+        FinishDSP::Settings s; s.macros = m; s.driveDb = manualDrive (m);
+        { FinishDSP dsp; dsp.prepare (o.sr, 512, 2); runDSP (dsp, out, s); }
+        auto sb = s; sb.bypass = true; sb.matchAB = true;
+        { FinishDSP dsp; dsp.prepare (o.sr, 512, 2); runDSP (dsp, ab, sb); }
+        const auto fo = measure (out, o.sr, (int) (o.sr * 10));
+        const auto fab = measure (ab, o.sr, (int) (o.sr * 10));
+        const float peakDb = juce::Decibels::gainToDecibels (out.getMagnitude (0, out.getNumSamples()));
+        std::cout << "  " << name << "  LUFS " << fo.integratedLufs << " (A/B original " << fab.integratedLufs << ")"
+                  << "  peak " << peakDb << "  PLR " << fo.plr << "  side " << fo.sideRatio << "  lowSide " << fo.lowSideRatio
+                  << "  punch " << fo.punchIndex << "\n";
+        CHECK (allFinite (out), juce::String (name) + " produced NaN/Inf");
+        CHECK (peakDb <= FinishDSP::defaultCeilingDb + 0.01f, juce::String (name) + " exceeds the ceiling");
+        CHECK (std::abs (fab.integratedLufs - fo.integratedLufs) < 1.0f, juce::String (name) + " A/B level match off by more than 1 LU");
+        if (juce::String (name) == "MASSIVE")
+            CHECK (fo.integratedLufs > fin.integratedLufs + 3.0f, "MASSIVE should be clearly louder");
+        if (juce::String (name) == "WIDE")
         {
-            auto out = in;
-            FinishDSP dsp; dsp.prepare (o.sr, 512, 2);
-            FinishDSP::Settings s; s.macros = m; s.levelMatch = match;
-            runDSP (dsp, out, s);
-            const auto fo = measure (out, o.sr, (int) (o.sr * 10));
-            const float peakDb = juce::Decibels::gainToDecibels (out.getMagnitude (0, out.getNumSamples()));
-            std::cout << "  " << name << (match ? " (match on) " : " (match off)") << "  LUFS " << fo.integratedLufs
-                      << "  peak " << peakDb << "  PLR " << fo.plr << "  side " << fo.sideRatio << "  lowSide " << fo.lowSideRatio
-                      << "  punch " << fo.punchIndex << "\n";
-            CHECK (allFinite (out), juce::String (name) + " produced NaN/Inf");
-            CHECK (peakDb <= FinishDSP::ceilingDb + 0.01f, juce::String (name) + " exceeds the ceiling");
-            if (match)
-                CHECK (std::abs (fo.integratedLufs - fin.integratedLufs) < 1.0f, juce::String (name) + " level match off by more than 1 LU");
-            if (! match && juce::String (name) == "MASSIVE")
-                CHECK (fo.integratedLufs > fin.integratedLufs + 3.0f, "MASSIVE should be clearly louder without match");
-            if (juce::String (name) == "WIDE")
-            {
-                CHECK (fo.sideRatio > fin.sideRatio * 1.3f, "WIDE should widen");
-                CHECK (fo.lowSideRatio <= fin.lowSideRatio + 0.01f, "WIDE must not widen the bass");
-            }
-            if (juce::String (name) == "PUNCH")
-                CHECK (fo.punchIndex > fin.punchIndex + 0.5f, "PUNCH should strengthen transients");
+            CHECK (fo.sideRatio > fin.sideRatio * 1.3f, "WIDE should widen");
+            CHECK (fo.lowSideRatio <= fin.lowSideRatio + 0.01f, "WIDE must not widen the bass");
         }
+        if (juce::String (name) == "PUNCH")
+            CHECK (fo.punchIndex > fin.punchIndex + 0.5f, "PUNCH should strengthen transients");
     }
 
     // Determinism + block-size independence
-    FinishDSP::Settings s; s.macros = presets[2].second;
+    FinishDSP::Settings s; s.macros = presets[2].second; s.driveDb = manualDrive (s.macros);
     auto a = in, b2 = in;
     { FinishDSP d; d.prepare (o.sr, 4096, 2); runDSP (d, a, s, 4096); }
     { FinishDSP d; d.prepare (o.sr, 4096, 2); runDSP (d, b2, s, 4096); }
@@ -228,6 +231,68 @@ static void testStrategies()
     for (int ch = 0; ch < 2 && same; ++ch)
         same = std::memcmp (a.getReadPointer (ch), b2.getReadPointer (ch), sizeof (float) * (size_t) a.getNumSamples()) == 0;
     CHECK (same, "offline render is not deterministic");
+}
+
+static void testLoudnessTargets()
+{
+    std::cout << "DSP: mastering targets reach their loudness under the true-peak ceiling\n";
+    for (float inLevel : { -6.0f, -20.0f })
+    {
+        MixOptions o; o.seconds = 45; o.arrangement = false; o.levelDb = inLevel;
+        const auto in = makeMix (o);
+        const auto fin = measure (in, o.sr, (int) (o.sr * 5));
+        for (float target : { -14.0f, -11.0f, -9.0f })
+            for (float ceiling : { -1.0f, -0.3f })
+            {
+                auto out = in;
+                FinishDSP dsp; dsp.prepare (o.sr, 512, 2);
+                FinishDSP::Settings s; s.autoLoudness = true; s.targetLufs = target; s.ceilingDb = ceiling;
+                s.macros = { 1.0f, 0.3f, 0.3f, 0.5f, 0.5f, 0.3f };
+                // open-loop guess like the processor does (limiter efficiency 0.75)
+                const float wanted = target - fin.integratedLufs, headroom = ceiling - fin.peakDb;
+                s.driveDb = wanted <= headroom ? wanted : headroom + (wanted - headroom) / 0.75f;
+                runDSP (dsp, out, s);
+                const auto fo = measure (out, o.sr, (int) (o.sr * 20));
+                const float peakDb = juce::Decibels::gainToDecibels (out.getMagnitude (0, out.getNumSamples()));
+                std::cout << "  in " << fin.integratedLufs << " -> target " << target << " / ceiling " << ceiling
+                          << ": out " << fo.integratedLufs << " LUFS, peak " << peakDb << ", correction "
+                          << dsp.getLoudnessCorrectionDb() << " dB\n";
+                CHECK (std::abs (fo.integratedLufs - target) < 1.5f, "target " + juce::String (target) + " missed from " + juce::String (inLevel));
+                CHECK (peakDb <= ceiling + 0.01f, "ceiling " + juce::String (ceiling) + " exceeded");
+                CHECK (allFinite (out), "NaN in loudness target test");
+            }
+    }
+}
+
+static float maxDiff (const juce::AudioBuffer<float>& a, const juce::AudioBuffer<float>& b);
+
+static void testCreativeFx()
+{
+    std::cout << "DSP: creative FX (filters, gate, echo, space) are audible and safe\n";
+    MixOptions o; o.seconds = 12; o.arrangement = false; o.levelDb = -10.0f;
+    const auto in = makeMix (o);
+    const auto fin = measure (in, o.sr, (int) (o.sr * 2));
+    struct Case { const char* name; CreativeFX fx; };
+    const Case cases[] = { { "HP", { 0.8f, 0, 0, 0, 0 } }, { "LP", { 0, 0.8f, 0, 0, 0 } },
+                           { "GATE", { 0, 0, 1.0f, 0, 0 } }, { "ECHO", { 0, 0, 0, 1.0f, 0 } }, { "SPACE", { 0, 0, 0, 0, 1.0f } } };
+    for (auto& c : cases)
+    {
+        auto out = in;
+        FinishDSP dsp; dsp.prepare (o.sr, 512, 2);
+        FinishDSP::Settings s; s.fx = c.fx; s.bpm = 128.0; s.ppq = -1.0;   // free-running tempo clock
+        runDSP (dsp, out, s);
+        const auto fo = measure (out, o.sr, (int) (o.sr * 2));
+        const float diff = maxDiff (in, out);
+        const float peakDb = juce::Decibels::gainToDecibels (out.getMagnitude (0, out.getNumSamples()));
+        std::cout << "  " << c.name << ": LUFS " << fo.integratedLufs << "  low " << fo.lowRatio << "  high " << fo.highRatio
+                  << "  peak " << peakDb << "\n";
+        CHECK (allFinite (out), juce::String (c.name) + " NaN");
+        CHECK (diff > 0.05f, juce::String (c.name) + " is not audible");
+        CHECK (peakDb <= FinishDSP::defaultCeilingDb + 0.01f, juce::String (c.name) + " exceeds the ceiling");
+        if (juce::String (c.name) == "HP") CHECK (fo.lowRatio < fin.lowRatio * 0.5f, "HP filter should remove lows");
+        if (juce::String (c.name) == "LP") CHECK (fo.highRatio < fin.highRatio * 0.5f, "LP filter should remove highs");
+        if (juce::String (c.name) == "GATE") CHECK (fo.integratedLufs < fin.integratedLufs - 1.0f, "gate should chop the level");
+    }
 }
 
 static void testSampleRates()
@@ -240,15 +305,16 @@ static void testSampleRates()
         const auto fin = measure (in, sr, (int) (sr * 8));
         auto out = in;
         FinishDSP dsp; dsp.prepare (sr, 1024, 2);
-        FinishDSP::Settings s; s.macros = { 1.0f, 0.7f, 0.6f, 0.75f, 0.4f, 0.9f };
+        FinishDSP::Settings s; s.macros = { 1.0f, 0.7f, 0.6f, 0.75f, 0.4f, 0.9f }; s.driveDb = manualDrive (s.macros);
+        s.fx = { 0.2f, 0.2f, 0.3f, 0.3f, 0.3f };
         runDSP (dsp, out, s, 1024);
         const auto fo = measure (out, sr, (int) (sr * 8));
         const float peakDb = juce::Decibels::gainToDecibels (out.getMagnitude (0, out.getNumSamples()));
         std::cout << "  " << sr << " Hz: in " << fin.integratedLufs << " LUFS (punch " << fin.punchIndex << ", low " << fin.lowRatio
-                  << ")  out " << fo.integratedLufs << " LUFS, peak " << peakDb << "\n";
+                  << ")  out " << fo.integratedLufs << " LUFS, peak " << peakDb << ", latency " << dsp.getLatencySamples() << "\n";
         CHECK (allFinite (out), "NaN at " + juce::String (sr));
-        CHECK (peakDb <= FinishDSP::ceilingDb + 0.01f, "ceiling exceeded at " + juce::String (sr));
-        CHECK (std::abs (fo.integratedLufs - fin.integratedLufs) < 1.0f, "level match off at " + juce::String (sr));
+        CHECK (peakDb <= FinishDSP::defaultCeilingDb + 0.01f, "ceiling exceeded at " + juce::String (sr));
+        CHECK (fo.integratedLufs > -40.0f, "output vanished at " + juce::String (sr));
     }
 }
 
@@ -349,11 +415,13 @@ struct TestPlayHead : juce::AudioPlayHead
 {
     double time = 0.0;
     bool playing = true;
+    double bpm = 0.0;     // > 0: also report tempo and musical position
     juce::Optional<PositionInfo> getPosition() const override
     {
         PositionInfo info;
         info.setTimeInSeconds (time);
         info.setIsPlaying (playing);
+        if (bpm > 0.0) { info.setBpm (bpm); info.setPpqPosition (time * bpm / 60.0); }
         return info;
     }
 };
@@ -518,6 +586,62 @@ static void analyseTimed (FINISHAudioProcessor& p, TestPlayHead& ph, const juce:
     ph.playing = true;
 }
 
+juce::AudioBuffer<float> renderReferenceDropForTests (double sr, double& bpm);
+
+static void testFinishEndToEnd()
+{
+    std::cout << "FINISH MY TRACK end to end: play a drop in the DAW, one click, arrangement + master + preview + export\n";
+    const double sr = 48000.0;
+    double bpm = 0;
+    const auto drop = renderReferenceDropForTests (sr, bpm);
+    FINISHAudioProcessor p;
+    p.setPlayConfigDetails (2, 2, sr, 512);
+    p.prepareToPlay (sr, 512);
+    TestPlayHead ph; ph.bpm = bpm;
+    p.setPlayHead (&ph);
+    const double start = 64.0 * 60.0 / bpm;   // the drop sits at bar 17 of the user's set
+    feedTimed (p, ph, drop, sr, start, 512, true);
+    ph.playing = false;
+    { juce::AudioBuffer<float> silence (2, 512); silence.clear(); juce::MidiBuffer mb; for (int i = 0; i < 20; ++i) p.processBlock (silence, mb); }
+    juce::MessageManager::getInstance()->runDispatchLoopUntil (100);
+
+    p.finishMyTrack();   // nothing was "listening": FINISH uses what was just played
+    for (int i = 0; i < 300 && ! p.getComposer().hasArrangement(); ++i) juce::MessageManager::getInstance()->runDispatchLoopUntil (20);
+    std::cout << "  status: " << p.getStatusMessage() << "\n";
+    CHECK (p.getComposer().hasArrangement(), "one click did not produce an arrangement");
+    if (! p.getComposer().hasArrangement()) return;
+    const auto& dna = p.getComposer().getDNA();
+    CHECK (dna.keyRoot == 9 && dna.minor, "end-to-end key should be A minor");
+    CHECK (std::abs (dna.bpm - bpm) < 0.01, "end-to-end tempo from host");
+    CHECK (p.getComposer().getUserBar() == 16, "drop position in the set should be bar 17, got " + juce::String (p.getComposer().getUserBar() + 1));
+    CHECK ((int) p.params.getRawParameterValue (ParamIDs::target)->load() == 2, "master target should switch to BALANCED");
+
+    // Preview: the generated intro is audible through the plugin, even with the transport stopped.
+    p.previewSection (0, true);
+    juce::AudioBuffer<float> buf (2, 512); juce::MidiBuffer mb;
+    float peak = 0;
+    for (int i = 0; i < 400; ++i) { buf.clear(); p.processBlock (buf, mb); peak = std::max (peak, buf.getMagnitude (0, 512)); }
+    p.stopPreview();
+    std::cout << "  preview peak " << peak << "\n";
+    CHECK (peak > 0.05f && peak <= 1.0f, "preview silent or over full scale");
+
+    // Commands go to the composer.
+    const auto sections = p.getComposer().getArrangement().sections.size();
+    p.setIntent (juce::String (juce::CharPointer_UTF8 (u8"crée un bridge mélodique sombre")));
+    CHECK (p.getComposer().getArrangement().sections.size() == sections + 1, "command did not add the bridge");
+
+    // Export + state.
+    const auto r = p.exportArrangement();
+    CHECK (r.ok && r.fullMidi.existsAsFile(), "export from the processor failed");
+    r.folder.deleteRecursively();
+    juce::MemoryBlock state;
+    p.getStateInformation (state);
+    FINISHAudioProcessor q;
+    q.setStateInformation (state.getData(), (int) state.getSize());
+    juce::MessageManager::getInstance()->runDispatchLoopUntil (50);
+    CHECK (q.getComposer().hasArrangement() && q.getComposer().getArrangement().sections.size() == sections + 1, "arrangement not restored from the session");
+}
+
 static void testTrackEngine()
 {
     std::cout << "FINISH MY TRACK: track map, Section DNA, transitions, variants\n";
@@ -585,7 +709,8 @@ static void testTrackEngine()
         p.editTrack ([] (TrackEngine& e) { e.keepOriginal (Sel::section (0)); });
         juce::AudioBuffer<float> outKeep;
         feedTimed (p, ph, slice (mix, o.sr, 0.0, 16.0), o.sr, 30.0, 512, false, &outKeep);
-        const float dKeep = maxDiff (slice (outKeep, o.sr, 3.0, 14.0), slice (mix, o.sr, 3.0, 14.0));
+        const double lat = p.getLatencySamples() / o.sr;   // look-ahead limiter latency (reported to the host)
+        const float dKeep = maxDiff (slice (outKeep, o.sr, 3.0 + lat, 14.0 + lat), slice (mix, o.sr, 3.0, 14.0));
         std::cout << "    keep original: max diff vs untouched audio " << dKeep << "\n";
         CHECK (dKeep < 1.0e-5f, "Keep Original did not leave the section untouched");
         if (auto* pp = p.params.getParameter (ParamIDs::punch)) pp->setValueNotifyingHost (0.0f);
@@ -752,13 +877,24 @@ int main (int argc, char** argv)
 {
     juce::ScopedJuceInitialiser_GUI gui;
 
+    const bool composeOnly = argc > 1 && juce::String (argv[1]) == "--compose";
+    runComposeTests();
+    if (composeOnly)
+    {
+        std::cout << "\n" << (checks - failures) << "/" << checks << " checks passed\n";
+        return failures == 0 ? 0 : 1;
+    }
+
     testTransparency();
     testStrategies();
+    testLoudnessTargets();
+    testCreativeFx();
     testSampleRates();
     testDiagnosis();
     testIntent();
     testProcessorAndState();
     testTrackEngine();
+    testFinishEndToEnd();
 
     for (int i = 1; i + 1 < argc; ++i)
         if (juce::String (argv[i]) == "--snapshot")

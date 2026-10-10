@@ -57,7 +57,9 @@ juce_add_binary_data(FinishAssets
         Resources/Fonts/Unbounded-Regular.ttf
         Resources/Fonts/Manrope-Medium.ttf
         Resources/Fonts/Manrope-Bold.ttf
-        Resources/Fonts/JetBrainsMono-Medium.ttf)
+        Resources/Fonts/JetBrainsMono-Medium.ttf
+        Resources/LiveScript/__init__.py
+        Resources/LiveScript/finish_bridge.py)
 set_target_properties(FinishAssets PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 set(FINISH_SOURCES
@@ -77,7 +79,14 @@ set(FINISH_SOURCES
     Source/Decision/DecisionEngine.cpp
     Source/UI/TrackMapView.cpp
     Source/UI/Inspector.cpp
-    Source/UI/Panels.cpp)
+    Source/UI/Panels.cpp
+    Source/Compose/MusicCapture.cpp
+    Source/Compose/MusicAnalyzer.cpp
+    Source/Compose/ArrangementGenerator.cpp
+    Source/Compose/PreviewSynth.cpp
+    Source/Compose/ArrangementExport.cpp
+    Source/Compose/ComposeCommand.cpp
+    Source/Compose/Composer.cpp)
 
 target_sources(FINISH PRIVATE ${FINISH_SOURCES})
 target_compile_features(FINISH PRIVATE cxx_std_17)
@@ -104,7 +113,7 @@ target_link_libraries(FINISH
 if(FINISH_BUILD_TESTS)
     juce_add_console_app(FinishTests PRODUCT_NAME "FinishTests")
     juce_generate_juce_header(FinishTests)
-    target_sources(FinishTests PRIVATE ${FINISH_SOURCES} Tests/TestMain.cpp)
+    target_sources(FinishTests PRIVATE ${FINISH_SOURCES} Tests/TestMain.cpp Tests/ComposeTests.cpp)
     target_include_directories(FinishTests PRIVATE Source)
     target_compile_features(FinishTests PRIVATE cxx_std_17)
     target_compile_definitions(FinishTests PRIVATE ${FINISH_DEFINITIONS} JucePlugin_Name="FINISH" JUCE_STANDALONE_APPLICATION=1 JUCE_MODAL_LOOPS_PERMITTED=1)

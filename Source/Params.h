@@ -13,9 +13,21 @@ namespace ParamIDs
     inline constexpr const char* bypass   = "bypass";
     inline constexpr const char* match    = "levelMatch";
     inline constexpr const char* coherence = "coherence";
+    inline constexpr const char* target   = "target";
+    inline constexpr const char* ceiling  = "ceiling";
 
     inline constexpr int version = 1;
 }
+
+// Loudness targets (integrated LUFS). Index 0 = manual (DRIVE knob).
+struct LoudnessTarget { const char* name; const char* shortName; float lufs; };
+inline constexpr LoudnessTarget loudnessTargets[] = {
+    { "Manual",          "MANUAL",  0.0f },
+    { "Streaming -14",   "STREAM",  -14.0f },
+    { "Balanced -11",    "BALANCED", -11.0f },
+    { "Club -9",         "CLUB",    -9.0f },
+    { "Loud -7",         "LOUD",    -7.0f } };
+inline constexpr int numLoudnessTargets = 5;
 
 // Neutral values: with these, FINISH is transparent (except the -1 dBFS safety ceiling).
 struct MacroSettings
@@ -71,7 +83,18 @@ inline juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout
     // FINISH MY TRACK: how strongly section edits are pulled towards one consistent sound.
     addFloat (ParamIDs::coherence, "Coherence", 0.5f, percent, parsePercent);
 
+    // Mastering: loudness target + true-peak ceiling.
+    {
+        StringArray names;
+        for (auto& t : loudnessTargets) names.add (t.name);
+        layout.add (std::make_unique<AudioParameterChoice> (ParameterID { ParamIDs::target, ParamIDs::version }, "Loudness Target", names, 0));
+    }
+    layout.add (std::make_unique<AudioParameterFloat> (
+        ParameterID { ParamIDs::ceiling, ParamIDs::version }, "Ceiling", NormalisableRange<float> (-3.0f, -0.1f, 0.1f), -1.0f,
+        AudioParameterFloatAttributes().withLabel ("dBTP")
+            .withStringFromValueFunction ([] (float v, int) { return String (v, 1) + " dBTP"; })));
+
     layout.add (std::make_unique<AudioParameterBool> (ParameterID { ParamIDs::bypass, ParamIDs::version }, "Bypass", false));
-    layout.add (std::make_unique<AudioParameterBool> (ParameterID { ParamIDs::match,  ParamIDs::version }, "A/B Level Match", true));
+    layout.add (std::make_unique<AudioParameterBool> (ParameterID { ParamIDs::match,  ParamIDs::version }, "A/B Level Match", true));   // only affects the original while A/B bypassing
     return layout;
 }

@@ -10,6 +10,9 @@
 #include "Reference/ReferenceProfile.h"
 #include "Music/TrackEngine.h"
 #include "DSP/FinishDSP.h"
+#include "Compose/MusicCapture.h"
+#include "Compose/PreviewSynth.h"
+#include "Compose/Composer.h"
 
 // Threading model
 //   audio thread  : analyzer + section plan evaluation (by host song position) + DSP. Atomics, lock-free FIFOs,
@@ -66,6 +69,30 @@ public:
     const juce::String& getIntentText() const noexcept { return intentText; }
     const juce::StringArray& getIntentUnderstood() const noexcept { return intentUnderstood; }
 
+    // ---- FINISH MY TRACK, one button: analyse what was played (or listen first), map the song, write the
+    // missing parts (3 proposals), switch the master on. Returns a short status.
+    void finishMyTrack();
+    bool isComposing() const noexcept { return composing.load(); }
+    const Composer& getComposer() const noexcept { return composer; }
+    void editComposer (const std::function<void (Composer&)>& change);
+    double getRecentPlaySeconds() const noexcept { return recent.getDuration(); }
+
+    // Preview of generated parts (built-in instruments). section = -1: whole arrangement from the start.
+    void previewSection (int section, bool loop);
+    void stopPreview();
+    bool isPreviewing() const noexcept { return preview.isPlaying(); }
+    double getPreviewBeat() const noexcept { return preview.getPositionBeats(); }
+    int getPreviewSection() const noexcept { return previewSectionIndex; }
+    void setPreviewSolo (bool solo) { previewSolo.store (solo); }
+    bool getPreviewSolo() const noexcept { return previewSolo.load(); }
+    void setPreviewLaneMuted (Lane l, bool m) { preview.setLaneMuted (l, m); }
+    bool isPreviewLaneMuted (Lane l) const noexcept { return preview.isLaneMuted (l); }
+
+    // Delivery
+    ArrangementExport::Result exportArrangement();
+    void sendArrangementToLive();
+    juce::File exportClipForDrag (int section, Lane lane);
+
     // Whole-track strategies (PUNCH / WIDE / MASSIVE) drive the global controls.
     void applyProposal (int index);
     void resetMacros();
@@ -93,12 +120,25 @@ public:
     const FinishDSP& getDSP() const noexcept { return dsp; }
     // Section layer currently applied by the audio thread (for the UI).
     SectionMacros getLiveSectionLayer() const noexcept;
+    float getLiveFxAmount() const noexcept { return liveFx.load(); }
+
+    // Mastering
+    int getTargetIndex() const noexcept;
+    float getSongLoudness() const noexcept;           // analysed (or live long-term) LUFS of the song
+    float getAutoDriveDb() const noexcept { return autoDriveDb.load(); }
+    float computeDriveFor (float targetLufs) const noexcept;
+    double getHostBpm() const noexcept { return hostBpm.load(); }
+    static constexpr float limiterEfficiency = 0.75f;
 
     MacroSettings getCurrentMacros() const;
 
 private:
     void timerCallback() override;
     void finishAnalysis();
+    void finishAnalysisFrom (const AnalysisSession& source);
+    void startComposeAnalysis (double from, double to);
+    void afterCompose();
+    void refreshPreviewSequence();
     void rebuildDecisions();
     void publishPlan();
     void updateSpectrum();
@@ -112,6 +152,11 @@ private:
     std::atomic<float>* pAmount = nullptr; std::atomic<float>* pImpact = nullptr; std::atomic<float>* pPunch = nullptr;
     std::atomic<float>* pWidth = nullptr;  std::atomic<float>* pWarmth = nullptr; std::atomic<float>* pLoud = nullptr;
     std::atomic<float>* pBypass = nullptr; std::atomic<float>* pMatch = nullptr; std::atomic<float>* pCoherence = nullptr;
+    std::atomic<float>* pTarget = nullptr; std::atomic<float>* pCeiling = nullptr;
+    std::atomic<float> autoDriveDb { 0.0f }, liveFx { 0.0f };
+    std::atomic<double> hostBpm { 120.0 };
+    float liveSongLufs = -70.0f;
+    void updateAutoDrive();
     std::atomic<double> currentSampleRate { 44100.0 };
 
     // Section plan hand-over (message thread writes under lock, audio thread try-locks).
@@ -122,6 +167,24 @@ private:
     SectionMacros layerSmoothed;
     float keepSmoothed = 0;
     std::atomic<float> liveImpact { 0 }, livePunch { 0 }, liveWidth { 0 }, liveWarmth { 0 }, liveLoud { 0 }, liveTrim { 0 };
+
+    // Compose (audio thread: capture + preview)
+    MusicCapture capture;
+    PreviewSynth preview;
+    std::atomic<bool> previewSolo { true };
+    std::atomic<double> previewBpm { 120.0 };
+    int previewSectionIndex = -1;
+    int previewSeqVersion = -1;
+
+    // Compose (message thread)
+    Composer composer;
+    AnalysisSession recent;                 // frames of the last stretch played (always recorded)
+    double recentLastTime = -1.0;
+    std::atomic<bool> composing { false };
+    bool composeAfterwards = false;
+    struct ComposeJobResult { MusicalDNA dna; int userBar = 0; bool ready = false; };
+    juce::CriticalSection composeLock;
+    ComposeJobResult composeResult;
 
     // Message thread state
     AnalysisSession session;
