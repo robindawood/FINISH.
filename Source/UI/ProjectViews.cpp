@@ -239,6 +239,7 @@ void ProjectView::paint (juce::Graphics& g)
                         }
                 continue;
             }
+            if ((size_t) ti >= s.cells.size()) continue;
             const auto& c = s.cells[(size_t) ti];
             const bool hovCell = ! hover.header && hover.section == i && hover.track == ti;
             if (c.parts.empty())
@@ -332,7 +333,7 @@ void ProjectView::mouseMove (const juce::MouseEvent& e)
         {
             const auto& s = plan.sections[(size_t) h.section];
             if (h.header) tip = s.existing ? utf8 ("Ta section, déjà dans ton set (FINISH n'y touche pas).") : s.recipe + utf8 ("  —  clic : écouter (aperçu), clic droit : autre variante");
-            else if (h.track >= 0 && ! s.existing)
+            else if (h.track >= 0 && ! s.existing && (size_t) h.track < s.cells.size())
                 tip = proc.getProject().getProject().tracks[(size_t) h.track].name + " : " + s.cells[(size_t) h.track].summary() + utf8 ("  —  clic : activer/désactiver");
         }
         setTooltip (tip);

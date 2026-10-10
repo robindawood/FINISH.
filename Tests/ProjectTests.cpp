@@ -360,6 +360,11 @@ void testLiveEndToEnd()
     CHECK (s.getLastReport().contains ("clips ecrits"), "clips written");
     CHECK (pump ([&] { return s.getPhase() == ProjectSession::Phase::Ready; }, 15.0), "set read again after writing");
     const int clipsAfter = s.getProject().countClips (true);
+    {
+        bool consistent = s.hasPlan();
+        for (auto& sec : s.getPlan().sections) consistent &= sec.cells.size() == s.getProject().tracks.size();
+        CHECK (consistent, "plan follows the set after it changed (new tracks): no stale cells for the UI");
+    }
     CHECK (clipsAfter > clipsBefore + 10, "the new clips are in the set (" << clipsBefore << " -> " << clipsAfter << ")");
     CHECK (s.hasSent() && s.undoSend (err), "undo: " << err);
     CHECK (pump ([&] { return s.takeLiveResult(); }, 15.0), "Live answered the undo");

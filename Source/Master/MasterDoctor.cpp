@@ -52,7 +52,7 @@ MasterPlan design (const Request& r)
     const auto& f = r.in;
     if (! f.valid) return p;
     p.valid = true;
-    const bool isClub = (r.bpm >= 118.0 && r.bpm <= 150.0) || r.bpm >= 160.0;
+    const bool isClub = (r.bpm >= 110.0 && r.bpm <= 150.0) || r.bpm >= 160.0;
     p.genre = isClub ? "club" : utf8 ("général");
     Landmarks lm = isClub ? club : general;
     const auto* ref = r.reference != nullptr && r.reference->valid ? r.reference : nullptr;

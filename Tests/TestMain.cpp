@@ -1212,12 +1212,90 @@ static void snapshot (const juce::File& base)
     }
 }
 
+// Step-by-step screens for the demo video: the real plugin, talking to the real Remote Script on a mock Live
+// (Tests/live_mock_server.py must be running with the same HOME).
+static void demo (const juce::File& dir)
+{
+    std::cout << "Rendering demo screens\n";
+    dir.createDirectory();
+    auto file = [&] (const char* n) { return dir.getChildFile (juce::String (n) + ".png"); };
+    const double sr = 48000.0;
+    FINISHAudioProcessor p;
+    p.setPlayConfigDetails (2, 2, sr, 512);
+    p.prepareToPlay (sr, 512);
+    TestPlayHead ph; ph.bpm = 115.0; ph.playing = false;
+    p.setPlayHead (&ph);
+    std::unique_ptr<juce::AudioProcessorEditor> ed (p.createEditorIfNeeded());
+    auto* e = dynamic_cast<FINISHAudioProcessorEditor*> (ed.get());
+    if (e == nullptr) return;
+    auto waitFor = [&] (std::function<bool()> f, int ms) { for (int t = 0; t < ms && ! f(); t += 50) pump (50); };
+    waitFor ([&] { return p.getProject().getDiagnosis().connected(); }, 8000);
+    pump (300);
+    writePng (*e, file ("01_connected"));
+
+    p.readLiveProject();
+    waitFor ([&] { return p.getProject().hasPlan() && p.getProject().getPhase() == ProjectSession::Phase::Ready; }, 15000);
+    pump (500);
+    writePng (*e, file ("02_read"));
+
+    p.setIntent (utf8 ("termine mon morceau sans toucher à ma mélodie principale"));
+    e->getCommandStrip().refresh();
+    pump (400);
+    writePng (*e, file ("03_command"));
+
+    p.editProject ([] (ProjectSession& s) { s.setLevel (Level::Improve); });
+    pump (400);
+    writePng (*e, file ("04_improve"));
+
+    // Approximate preview (plays through processBlock)
+    p.previewProject (-1, false);
+    {
+        juce::AudioBuffer<float> sil (2, (int) (sr * 9.0)); sil.clear();
+        juce::MidiBuffer mb; juce::AudioBuffer<float> blk (2, 512);
+        for (int pos = 0; pos < sil.getNumSamples(); pos += 512) { blk.clear(); p.processBlock (blk, mb); if ((pos / 512) % 100 == 0) pump (5); }
+    }
+    pump (300);
+    writePng (*e, file ("05_preview"));
+    p.stopPreview();
+    dir.getChildFile ("confirm.txt").replaceWithText (p.getProject().confirmText());
+
+    p.sendProjectToLive();
+    waitFor ([&] { return p.getProject().hasSent() && p.getProject().getPhase() == ProjectSession::Phase::Ready && p.getAnswer().contains ("clips"); }, 20000);
+    pump (600);
+    writePng (*e, file ("06_sent"));
+    dir.getChildFile ("report.txt").replaceWithText (p.getProject().getLastReport());
+
+    // Mastering on a mix with problems (low-mid build-up, stereo bass)
+    ph.playing = true;
+    const auto mix = makeProblemMix (sr, 30.0, 0.05f);
+    feedTimed (p, ph, mix, sr, 10.0, 512, true);
+    p.applyRecommendedTarget();
+    feedTimed (p, ph, mix, sr, 40.0, 512, true);
+    pump (2200);
+    feedTimed (p, ph, mix, sr, 70.0, 512, true);
+    pump (2200);
+    e->setPage (FINISHAudioProcessorEditor::master);
+    feedTimed (p, ph, juce::AudioBuffer<float> (mix), sr, 100.0, 512, true);
+    pump (300);
+    writePng (*e, file ("07_master"));
+    e->getMasterView().showReport (true);
+    pump (300);
+    writePng (*e, file ("08_master_report"));
+    ed.reset();
+    juce::File (juce::SystemStats::getEnvironmentVariable ("FINISH_E2E_HOME", {})).getChildFile ("stop").create();
+}
+
 int main (int argc, char** argv)
 {
     juce::ScopedJuceInitialiser_GUI gui;
 
     const bool composeOnly = argc > 1 && juce::String (argv[1]) == "--compose";
     const bool projectOnly = argc > 1 && juce::String (argv[1]) == "--project";
+    if (argc > 2 && juce::String (argv[1]) == "--demo")
+    {
+        demo (juce::File::getCurrentWorkingDirectory().getChildFile (argv[2]));
+        return 0;
+    }
     if (argc > 1 && juce::String (argv[1]) == "--master")
     {
         testMasterDoctor();

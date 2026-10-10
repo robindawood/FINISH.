@@ -61,12 +61,16 @@ bool ProjectSession::tick()
         project = std::move (p);
         analysis = ProjectAnalyzer::analyse (project);
         log (Entry::Kind::Analysed, analysis.summary);
+        // The plan always follows the set as it is now (after a send, what was written shows as part of the set).
         if (autoPlanAfterRead)
         {
             history.clear();
+            offCells.clear();
             replan (false);
             freshPlan = plan.valid;
         }
+        else
+            replan (true);
         autoPlanAfterRead = true;
         phase = plan.valid ? Phase::Ready : Phase::Idle;
         return true;
@@ -296,7 +300,7 @@ juce::String ProjectSession::confirmText() const
     for (auto& s : plan.sections)
         if (! s.existing)
             for (auto& c : s.cells) if (! c.empty()) used.insert (c.track);
-    for (int t : used) tracks.add (project.tracks[(size_t) t].name);
+    for (int t : used) if (t < (int) project.tracks.size()) tracks.add (project.tracks[(size_t) t].name);
     juce::String s;
     s << utf8 ("FINISH va écrire ") << plan.countWrites() << utf8 (" clip(s) dans ton set, à partir de la mesure ") << (plan.firstNewBar + 1) << " :\n";
     for (auto& sec : plan.sections)
