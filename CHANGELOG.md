@@ -1,5 +1,20 @@
 # Changelog
 
+## 3.1.0 - sound fidelity first
+- Every new part plays through the project's own instruments, presets, plug-ins and effects; FINISH never loads or
+  substitutes an instrument (the legacy path that loaded Live instruments on new tracks is gone).
+- Variations are built on a copy of the user's clip (duplicate, then replace the notes): clip envelopes, groove,
+  transposition and settings are kept. Parts that do not fit a whole copy are reported ("clip neuf").
+- Sound inventory read from the set: instruments / presets / racks, third-party plug-ins, effect chains, Simpler and
+  Drum Rack samples, parameter values, automated parameters (SONS DU PROJET).
+- Fidelity check after each send: device and parameter signatures of every track compared before / after; arrangement
+  automation that the Live API cannot copy is reported with what to do.
+- ÉCOUTER DANS LIVE: writes the plan and plays Live from 2 bars before the new parts (real sounds), keep or undo.
+  The in-plugin preview is labelled APERÇU (FINISH's simplified sounds).
+- FINISH's own sounds (FX track: risers, impacts) are off by default (SONS FINISH toggle, explicitly labelled).
+- ESQUISSE -> Live: parts routed onto the user's tracks by role, drums remapped to their own pads, melodic parts
+  transposed into the project's key; a part with no matching track or pad is reported, never replaced.
+
 ## 3.0.0
 - PROJECT mode: FINISH MY TRACK continues the user's own Ableton Live project instead of generating a new track.
   - Remote Script v3 reads the set (tempo, signature, scale, locators, tracks, devices and drum pads, Arrangement and

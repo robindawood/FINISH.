@@ -16,7 +16,7 @@
 //   then: "plus subtil", "plus sombre", "garde la version précédente", "modifie uniquement la basse", "envoie dans Live"...
 struct ProjectCommand
 {
-    enum class Kind { None = 0, Finish, Sections, Rise, Variation, AnalyseProject, AnalyseMix, Master, Iterate, Send, UndoSend, KeepPrevious };
+    enum class Kind { None = 0, Finish, Sections, Rise, Variation, AnalyseProject, AnalyseMix, Master, Iterate, Send, UndoSend, KeepPrevious, Inventory, Listen };
     Kind kind = Kind::None;
 
     std::set<TrackRole> lockRoles;       // "sans toucher à ..."

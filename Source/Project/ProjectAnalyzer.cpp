@@ -568,4 +568,82 @@ juce::String report (const ProjectAnalysis& a, const LiveProject& p)
     }
     return s;
 }
+
+static juce::String fileName (const juce::String& path)
+{
+    return path.isEmpty() ? juce::String() : juce::File::createFileWithoutCheckingPath (path.replaceCharacter ('\\', '/')).getFileName();
+}
+
+static juce::String deviceLabel (const LiveDevice& d)
+{
+    juce::String s = utf8 ("« ") + d.name + utf8 (" »");
+    const auto kind = d.plugin ? d.kindLabel() : (d.displayName.isNotEmpty() ? d.displayName : d.className);
+    if (kind.isNotEmpty() && kind != d.name) s << " (" << kind << ")";
+    if (! d.on) s << utf8 (" [éteint]");
+    return s;
+}
+
+juce::String soundInventory (const ProjectAnalysis& a, const LiveProject& p)
+{
+    juce::String s;
+    s << utf8 ("LES SONS DE TON PROJET — FINISH les réutilise tels quels : il écrit sur ces pistes, il ne charge et ne remplace aucun instrument.\n\n");
+    juce::StringArray plugins, automationNotes;
+    for (size_t i = 0; i < p.tracks.size(); ++i)
+    {
+        const auto& t = p.tracks[i];
+        if (t.group) continue;
+        s << "- " << t.name << " [" << trackRoleLabel (t.role) << (t.midi ? "" : ", audio") << "]";
+        if (! a.tracks.empty() && ! a.tracks[i].usable) s << utf8 ("  (non utilisée : ") << (t.mute ? "muette" : (t.frozen ? utf8 ("gelée") : "sans clip")) << ")";
+        s << "\n";
+        juce::StringArray inst, fx;
+        for (auto& d : t.devices)
+        {
+            if (d.plugin) plugins.addIfNotAlreadyThere (d.name + " (" + d.kindLabel() + ")");
+            if (d.isInstrument())
+            {
+                juce::String line = deviceLabel (d);
+                if (d.isDrumRack() && ! d.pads.empty())
+                {
+                    juce::StringArray pads;
+                    for (size_t k = 0; k < d.pads.size() && k < 8; ++k)
+                        pads.add (d.pads[k].second + (k < d.padSamples.size() && d.padSamples[k].isNotEmpty() ? " = " + fileName (d.padSamples[k]) : juce::String()));
+                    line << " : " << pads.joinIntoString (", ") << (d.pads.size() > 8 ? ", ..." : "");
+                }
+                if (d.sample.isNotEmpty()) line << " : sample " << fileName (d.sample);
+                for (auto& ch : d.chains)
+                    for (auto& x : ch.devices)
+                    {
+                        if (x.plugin) plugins.addIfNotAlreadyThere (x.name + " (" + x.kindLabel() + ")");
+                        if (x.sample.isNotEmpty()) line << " / " << fileName (x.sample);
+                    }
+                inst.add (line);
+            }
+            else fx.add (deviceLabel (d));
+            for (auto& au : d.automated) automationNotes.add (t.name + " : " + d.name + " / " + au);
+        }
+        for (auto& m : t.mixerAutomation) automationNotes.add (t.name + " : " + m);
+        if (! inst.isEmpty()) s << "    instrument : " << inst.joinIntoString (", ") << "\n";
+        if (! fx.isEmpty()) s << "    effets : " << fx.joinIntoString (utf8 (" → ")) << "\n";
+        if (! t.midi)
+        {
+            juce::StringArray files;
+            for (auto& c : t.arrangement) if (c.file.isNotEmpty()) files.addIfNotAlreadyThere (fileName (c.file));
+            for (auto& c : t.session) if (c.file.isNotEmpty()) files.addIfNotAlreadyThere (fileName (c.file));
+            if (! files.isEmpty()) s << "    samples : " << files.joinIntoString (", ") << utf8 ("  → copiés à l'identique (warp, gain, transposition)\n");
+        }
+        else if (t.hasContent())
+            s << utf8 ("    → nouvelles parties écrites sur cette piste ; les variations partent d'une copie de ton clip (enveloppes et réglages du clip conservés)\n");
+    }
+    if (! plugins.isEmpty())
+        s << utf8 ("\nPlug-ins tiers : ") << plugins.joinIntoString (", ")
+          << utf8 ("\n  Leurs presets et réglages restent dans tes pistes : FINISH n'a pas besoin de les recréer, il joue à travers eux.\n");
+    if (! automationNotes.isEmpty())
+    {
+        s << utf8 ("\nAUTOMATION DANS L'ARRANGEMENT (l'API de Live ne permet pas de la copier) :\n");
+        for (auto& n : automationNotes) s << "  - " << n << "\n";
+        s << utf8 ("  Sur les nouvelles mesures elle garde sa dernière valeur. FINISH te le rappelle après l'envoi : copie la lane (Cmd/Ctrl+C, Cmd/Ctrl+V).\n");
+    }
+    s << utf8 ("\nSons qui ne viennent PAS de ton projet : aucun par défaut. La piste FINISH FX (risers, impacts) n'est ajoutée que si tu actives « SONS FINISH ».");
+    return s;
+}
 }

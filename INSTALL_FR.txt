@@ -1,10 +1,10 @@
-FINISH 3.0 - Installation et utilisation
+FINISH 3.1 - Installation et utilisation
 ========================================
 
 INSTALLER
-  Mac     : double-clique FINISH-3.0.0-macOS.pkg (VST3 + AU + script Ableton Live).
+  Mac     : double-clique FINISH-3.1.0-macOS.pkg (VST3 + AU + script Ableton Live).
             Si macOS bloque : Réglages Système > Confidentialité et sécurité > « Ouvrir quand même ».
-  Windows : double-clique FINISH-3.0.0-Windows-Setup.exe (VST3 + script Ableton Live).
+  Windows : double-clique FINISH-3.1.0-Windows-Setup.exe (VST3 + script Ableton Live).
   Puis relance le scan des plugins (Ableton : Réglages > Plug-ins > Rescanner).
   IMPORTANT : si Live était ouvert pendant l'installation, redémarre-le (il charge le nouveau script au démarrage).
 
@@ -32,6 +32,21 @@ TERMINER TON MORCEAU (page PROJET)
      ANNULER L'ENVOI retire tout ce que FINISH vient d'ajouter (ou Cmd/Ctrl+Z dans Live).
   Live 12 conseillé (création de clips dans l'Arrangement). Live 11 : copies de clips possibles, le reste est signalé.
 
+TON SON, À L'IDENTIQUE
+  - FINISH écrit uniquement sur TES pistes : tes instruments, presets, plug-ins (VST/AU), effets et samples jouent les
+    nouvelles parties. Il ne charge et ne remplace jamais un instrument.
+  - Les variations partent d'une copie de ton clip : ses enveloppes (filtre, volume...), son groove et ses réglages restent.
+  - SONS DU PROJET : la liste de tes instruments, presets, plug-ins, effets, samples et automations, piste par piste.
+  - ÉCOUTER DANS LIVE : FINISH écrit le plan et lance Live juste avant les nouvelles parties -> tu entends TES vrais sons.
+    Si ça ne va pas : ANNULER L'ENVOI. (APERÇU = écoute rapide dans le plugin avec des sons simplifiés, pas les tiens.)
+  - Après chaque envoi, le compte rendu vérifie qu'aucun instrument ou effet n'a été ajouté, remplacé ou modifié.
+  - Ce que l'API de Live ne permet pas : copier l'automation dessinée dans l'Arrangement. FINISH te dit quelle piste
+    et quel paramètre : copie la lane sur les nouvelles mesures (Cmd/Ctrl+C, Cmd/Ctrl+V).
+  - SONS FINISH (désactivé par défaut) : ajoute des risers/impacts de FINISH sur une piste FINISH FX — ce ne sont pas
+    tes sons, c'est pour ça qu'il faut l'activer toi-même.
+  - Page ESQUISSE > SEND TO LIVE : les parties vont sur TES pistes du même rôle (ta batterie sur tes pads, ta basse...),
+    transposées dans ta tonalité. Une partie sans piste correspondante n'est pas envoyée (et c'est signalé).
+
 PARLER À FINISH (barre du haut, puis Entrée)
   « termine mon morceau sans toucher à ma mélodie principale »
   « fais monter progressivement l'énergie pendant les 16 prochaines mesures »
@@ -43,7 +58,7 @@ PARLER À FINISH (barre du haut, puis Entrée)
   « analyse mon mix et explique-moi pourquoi il manque de punch »
   « améliore le mastering en conservant le caractère sombre »
   puis : « plus subtil », « plus sombre », « garde la version précédente », « modifie uniquement la basse », « envoie dans Live »,
-  « annule l'envoi ».  Bouton JOURNAL : tout ce qui a été analysé, généré, envoyé, et ce qui reste à faire.
+  « annule l'envoi », « quels sont mes sons », « fais-moi écouter dans Live ».  Bouton JOURNAL : tout ce qui a été analysé, généré, envoyé, et ce qui reste à faire.
 
 MASTERING (page MASTER)
   Joue ton morceau (au moins 20 s, idéalement le passage le plus fort) : FINISH mesure ton mix en continu

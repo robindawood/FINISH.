@@ -54,12 +54,18 @@ public:
     bool canUndoPlan() const noexcept { return ! history.empty(); }
 
     // A free request. Returns the answer to show (and journal); sets `wantsSend` for "envoie".
-    struct Outcome { juce::String answer; bool wantsSend = false, wantsUndoSend = false, wantsMasterAnalysis = false, wantsMaster = false;
+    struct Outcome { juce::String answer; bool wantsListen = false; bool wantsSend = false, wantsUndoSend = false, wantsMasterAnalysis = false, wantsMaster = false;
                      bool keepDark = false, keepBright = false; juce::String mixTopic; bool needsProject = false; };
     Outcome apply (const ProjectCommand& cmd);
 
     // ---- writing into Live
     bool send (double sampleRate, juce::String& error);
+    bool sendAndListen (double sampleRate, juce::String& error);   // write, then play Live from just before the new parts
+    bool stopLive (juce::String& error);
+    void setFinishFx (bool on);
+    // ESQUISSE parts routed onto the user's own tracks (needs the project read)
+    bool loadSketchPlan (const Arrangement& sketch, int keyRoot, bool minor, juce::String& error);
+    bool isSketchPlan() const noexcept { return sketchPlan; }
     bool undoSend (juce::String& error);
     bool hasSent() const noexcept { return bridge.lastApplyId().isNotEmpty(); }
     const juce::String& getLastReport() const noexcept { return lastReport; }
@@ -95,4 +101,5 @@ private:
     int version = 0;
     bool autoPlanAfterRead = true;
     bool freshPlan = false, liveResult = false;
+    bool auditionPending = false, sketchPlan = false;
 };

@@ -15,11 +15,55 @@ juce::String trackRoleLabel (TrackRole r)
 
 bool LiveDevice::isInstrument() const noexcept
 {
+    if (type == 1) return true;
     static const char* inst[] = { "InstrumentGroupDevice", "DrumGroupDevice", "InstrumentVector", "UltraAnalog", "Drift", "Operator",
                                   "OriginalSimpler", "MultiSampler", "Collision", "StringStudio", "InstrumentImpulse", "LoungeLizard",
                                   "PluginDevice", "AuPluginDevice", "MxDeviceInstrument", "Tension", "Meld", "Electric" };
     for (auto* s : inst) if (className == s) return true;
     return false;
+}
+
+juce::String LiveDevice::kindLabel() const
+{
+    if (className == "PluginDevice") return "VST";
+    if (className == "AuPluginDevice") return "AU";
+    if (className.startsWith ("MxDevice")) return "Max for Live";
+    return "Live";
+}
+
+static LiveDevice deviceFrom (const juce::var& d)
+{
+    LiveDevice ld;
+    ld.name = d["name"].toString();
+    ld.className = d["class"].toString();
+    ld.displayName = d["display"].toString();
+    ld.type = (int) d.getProperty ("type", 0);
+    ld.plugin = (bool) d["plugin"];
+    ld.on = d.hasProperty ("on") ? (bool) d["on"] : true;
+    ld.sample = d["sample"].toString();
+    if (auto* pads = d["pads"].getArray())
+        for (auto& pd : *pads)
+            if (auto* a = pd.getArray(); a != nullptr && a->size() >= 2)
+            {
+                ld.pads.push_back ({ (int) a->getReference (0), a->getReference (1).toString() });
+                ld.padSamples.push_back (a->size() >= 3 ? a->getReference (2).toString() : juce::String());
+            }
+    if (auto* ps = d["params"].getArray())
+        for (auto& pv : *ps)
+            if (auto* a = pv.getArray(); a != nullptr && a->size() >= 4)
+                ld.params.push_back ({ a->getReference (0).toString(), a->getReference (2).toString(), (double) a->getReference (1), (int) a->getReference (3) != 0 });
+    if (auto* au = d["automated"].getArray())
+        for (auto& x : *au) ld.automated.add (x.toString());
+    if (auto* ch = d["chains"].getArray())
+        for (auto& c : *ch)
+        {
+            LiveDevice::Chain chain;
+            chain.name = c["name"].toString();
+            if (auto* ds = c["devices"].getArray())
+                for (auto& x : *ds) chain.devices.push_back (deviceFrom (x));
+            ld.chains.push_back (std::move (chain));
+        }
+    return ld;
 }
 
 juce::String LiveTrack::instrumentName() const
@@ -95,6 +139,8 @@ static LiveClip clipFrom (const juce::var& c, bool session)
         std::sort (k.notes.begin(), k.notes.end(), [] (auto& a, auto& b) { return a.start < b.start || (a.start == b.start && a.pitch < b.pitch); });
     }
     k.file = c["file"].toString();
+    k.gain = (double) c.getProperty ("gain", 0.0);
+    k.pitch = (int) c.getProperty ("pitch", 0);
     return k;
 }
 
@@ -149,17 +195,9 @@ LiveProject LiveProject::fromJson (const juce::var& v)
             lt.frozen = (bool) t["frozen"];
             lt.selected = (bool) t["selected"];
             if (auto* devs = t["devices"].getArray())
-                for (auto& d : *devs)
-                {
-                    LiveDevice ld;
-                    ld.name = d["name"].toString();
-                    ld.className = d["class"].toString();
-                    if (auto* pads = d["pads"].getArray())
-                        for (auto& pd : *pads)
-                            if (auto* a = pd.getArray(); a != nullptr && a->size() == 2)
-                                ld.pads.push_back ({ (int) a->getReference (0), a->getReference (1).toString() });
-                    lt.devices.push_back (ld);
-                }
+                for (auto& d : *devs) lt.devices.push_back (deviceFrom (d));
+            if (auto* ma = t["mixerAutomation"].getArray())
+                for (auto& x : *ma) lt.mixerAutomation.add (x.toString());
             if (auto* arr = t["arrangement"].getArray())
                 for (auto& c : *arr) lt.arrangement.push_back (clipFrom (c, false));
             if (auto* ses = t["session"].getArray())

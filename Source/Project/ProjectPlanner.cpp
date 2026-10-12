@@ -501,6 +501,7 @@ void renderNotes (ProjectPlan& plan, const LiveProject& p, const ProjectAnalysis
             const auto* clip = findClip (t, prof.material);
             for (auto& part : cell.parts)
             {
+                if (part.fixedNotes) continue;
                 part.notes.clear();
                 if (cell.locked) part.tx = { Tx::Copy };
                 if (clip == nullptr || ! clip->midi) continue;
@@ -644,7 +645,7 @@ ProjectPlan makePlan (const LiveProject& p, const ProjectAnalysis& a, const Plan
             if (! cell.parts.empty()) e += ProjectAnalyzer::energyWeight (prof.role);
         }
         s.energy = e;
-        if (improve) s.fx = fxFor (kind, s.bars, bpb);
+        if (improve && o.finishFx) s.fx = fxFor (kind, s.bars, bpb);
         plan.sections.push_back (s);
         bar += s.bars;
     }
@@ -695,7 +696,11 @@ ProjectPlan makePlan (const LiveProject& p, const ProjectAnalysis& a, const Plan
         }
     if (! locked.isEmpty()) plan.explain.add (utf8 ("Pistes non modifiées (copies exactes seulement) : ") + locked.joinIntoString (", ") + ".");
     plan.explain.add (juce::String (levelName (o.level)) + " : " + levelHelp (o.level));
-    plan.explain.add (utf8 ("Tout est écrit sur TES pistes, avec tes instruments et tes effets. Aucun clip existant n'est modifié ; une place déjà occupée est sautée."));
+    plan.explain.add (utf8 ("Tout est écrit sur TES pistes, avec tes instruments, presets, plug-ins et effets : aucun instrument n'est chargé ni remplacé. "
+                            "Les variations partent d'une copie de ton clip (ses enveloppes et réglages restent). Aucun clip existant n'est modifié."));
+    if (improve)
+        plan.explain.add (o.finishFx ? utf8 ("SONS FINISH activés : une piste FINISH FX (risers, impacts) sera ajoutée — ce ne sont PAS des sons de ton projet.")
+                                     : utf8 ("Transitions faites uniquement avec tes sons (roulements sur ta batterie). Les risers de FINISH sont désactivés (SONS FINISH)."));
     if (! plan.layers.empty())
     {
         juce::StringArray w;
@@ -750,6 +755,50 @@ juce::var buildApplyRequest (const ProjectPlan& plan, const LiveProject& p, cons
             auto& prof = a.tracks[(size_t) cell.track];
             const auto* clip = findClip (t, prof.material);
             if (clip == nullptr) continue;
+
+            // MIDI: when the cell has variations, or parts that are not whole copies of the user's clip, the section is cut
+            // into windows the length of that clip; each window that plays is one copy of the clip with its notes replaced.
+            // So every variation keeps the clip's envelopes, groove and settings.
+            if (clip->midi)
+            {
+                const double unit = copyUnit (*clip);
+                bool needWindows = false;
+                for (auto& part : cell.parts)
+                    if (! part.exactCopy() || std::fmod (part.bars * bpb + 1.0e-6, unit) > 1.0e-3 || std::fmod (part.startBar * bpb + 1.0e-6, unit) > 1.0e-3)
+                        needWindows = true;
+                if (needWindows)
+                {
+                    std::vector<LiveNote> all;
+                    for (auto& part : cell.parts)
+                        for (auto n : part.notes) { n.start += part.startBar * bpb; all.push_back (n); }
+                    const double secLen = s.bars * bpb;
+                    auto source = obj();
+                    source.getDynamicObject()->setProperty ("where", clip->session ? "session" : "arrangement");
+                    source.getDynamicObject()->setProperty ("index", clip->index);
+                    source.getDynamicObject()->setProperty ("start", clip->start);
+                    for (double w = 0.0; w < secLen - 1.0e-6; w += unit)
+                    {
+                        const double wl = std::min (unit, secLen - w);
+                        std::vector<LiveNote> win;
+                        for (auto& n : all)
+                            if (n.start >= w - 1.0e-6 && n.start < w + wl - 1.0e-6) { auto x = n; x.start -= w; x.length = std::min (x.length, wl - x.start); win.push_back (x); }
+                        if (win.empty()) continue;
+                        auto op = obj();
+                        auto* o = op.getDynamicObject();
+                        o->setProperty ("op", "clip");
+                        o->setProperty ("track", cell.track);
+                        o->setProperty ("trackName", t.name);
+                        o->setProperty ("start", s.startBar * bpb + w);
+                        o->setProperty ("length", wl);
+                        o->setProperty ("name", "FINISH " + s.name);
+                        o->setProperty ("notes", notesVar (win));
+                        o->setProperty ("source", source);
+                        o->setProperty ("unit", unit);
+                        ops.add (op);
+                    }
+                    continue;
+                }
+            }
             for (auto& part : cell.parts)
             {
                 const double startBeat = (s.startBar + part.startBar) * bpb, len = part.bars * bpb;
@@ -790,6 +839,12 @@ juce::var buildApplyRequest (const ProjectPlan& plan, const LiveProject& p, cons
                     if (part.notes.empty()) continue;
                     o->setProperty ("length", len);
                     o->setProperty ("notes", notesVar (part.notes));
+                    // Built on a copy of the user's clip so its envelopes and settings come along.
+                    if (unit <= len + 1.0e-6)
+                    {
+                        o->setProperty ("source", source);
+                        o->setProperty ("unit", unit);
+                    }
                 }
                 ops.add (op);
             }
@@ -818,6 +873,7 @@ juce::var buildApplyRequest (const ProjectPlan& plan, const LiveProject& p, cons
         o->setProperty ("start", l.startBar * bpb);
         o->setProperty ("length", l.bars * bpb);
         o->setProperty ("name", "FINISH FILL");
+        o->setProperty ("layer", true);
         o->setProperty ("notes", notesVar (l.notes));
         ops.add (op);
     }
@@ -921,5 +977,117 @@ Arrangement toPreview (const ProjectPlan& plan, const LiveProject& p, const Proj
     arr.layout();
     arr.summary = utf8 ("Aperçu approximatif avec les sons de FINISH. Le vrai son : tes instruments, dans Live.");
     return arr;
+}
+
+// --------------------------------------------------------------------------------------
+static int remapDrum (int gm, const DrumMap& d)
+{
+    auto first = [] (const std::vector<int>& v, int fallback) { return v.empty() ? fallback : v.front(); };
+    switch (gm)
+    {
+        case 35: case 36: return first (d.kick, -1);
+        case 37: case 38: case 39: case 40: return d.snare.empty() ? d.rollPitch : d.snare.front();
+        case 42: case 44: return first (d.hats, -1);
+        case 46: return d.hats.size() > 1 ? d.hats[1] : first (d.hats, -1);
+        case 49: case 57: return first (d.crash, -1);
+        default: return first (d.perc, -1);
+    }
+}
+
+ProjectPlan planFromSketch (const Arrangement& sketch, int sketchKeyRoot, bool sketchMinor, const LiveProject& p, const ProjectAnalysis& a)
+{
+    ProjectPlan plan;
+    if (! a.valid || sketch.sections.empty()) return plan;
+    plan.level = Level::Enrich;
+    plan.bpm = a.bpm;
+    plan.beatsPerBar = a.beatsPerBar;
+    const int nT = (int) p.tracks.size();
+    for (auto& e : a.sections)
+    {
+        if (e.kind == SecKind::Gap) continue;
+        PlanSection s;
+        s.kind = e.kind; s.name = secKindName (e.kind); s.startBar = e.startBar; s.bars = e.bars; s.existing = true; s.energy = e.energy;
+        s.cells.resize ((size_t) nT);
+        for (int i = 0; i < nT; ++i) s.cells[(size_t) i].track = i;
+        for (int i : e.tracks) s.cells[(size_t) i].parts.push_back ({ 0, e.bars, { Tx::Copy }, {} });
+        plan.sections.push_back (s);
+    }
+    // Lane -> the user's track with that role
+    auto pick = [&] (std::initializer_list<TrackRole> roles) -> int
+    {
+        for (auto r : roles)
+            for (auto& t : a.tracks)
+                if (t.usable && t.role == r && p.tracks[(size_t) t.track].midi) return t.track;
+        return -1;
+    };
+    const int target[numMidiLanes] = { pick ({ TrackRole::Drums, TrackRole::Perc }), pick ({ TrackRole::Bass }),
+                                       pick ({ TrackRole::Chords, TrackRole::Pad }), pick ({ TrackRole::Lead, TrackRole::Vocal }),
+                                       pick ({ TrackRole::Pad, TrackRole::Chords }) };
+    // Key: bring the sketch into the project's key (the project's notes are the reference)
+    int shift = 0;
+    if (a.keyConfidence > 0.2f && sketchMinor == a.minor)
+    {
+        shift = ((a.keyRoot - sketchKeyRoot) % 12 + 12) % 12;
+        if (shift > 6) shift -= 12;
+    }
+    const int start = (a.endBar + 3) / 4 * 4;
+    plan.firstNewBar = start;
+    const double bpb = a.beatsPerBar;
+    std::array<bool, numMidiLanes> missingReported {};
+    for (auto& g : sketch.sections)
+    {
+        if (g.isReference) continue;
+        PlanSection s;
+        s.kind = g.role == Role::Intro ? SecKind::Intro : g.role == Role::Build ? SecKind::Build : g.role == Role::Break || g.role == Role::Bridge ? SecKind::Break
+               : g.role == Role::Drop ? SecKind::Drop : g.role == Role::Drop2 ? SecKind::Drop2 : SecKind::Outro;
+        s.name = g.name;
+        s.bars = (int) std::round (g.bars * 4.0 / bpb);
+        s.startBar = start + (int) std::round (g.startBar * 4.0 / bpb);
+        s.recipe = g.recipe;
+        s.cells.resize ((size_t) nT);
+        for (int i = 0; i < nT; ++i) s.cells[(size_t) i].track = i;
+        for (int l = 0; l < numMidiLanes; ++l)
+        {
+            const auto& clip = g.clips[(size_t) l];
+            if (clip.notes.empty()) continue;
+            if (target[l] < 0)
+            {
+                if (! missingReported[(size_t) l])
+                    plan.manual.add (juce::String (laneName ((Lane) l)) + utf8 (" de l'esquisse : aucune piste de ce rôle dans ton set, partie non envoyée (FINISH ne charge pas d'instrument de remplacement)."));
+                missingReported[(size_t) l] = true;
+                continue;
+            }
+            const auto& prof = a.tracks[(size_t) target[l]];
+            PlanPart part;
+            part.startBar = 0; part.bars = s.bars; part.tx = { Tx::Copy }; part.fixedNotes = true;
+            int dropped = 0;
+            for (auto& n : clip.notes)
+            {
+                LiveNote ln;
+                ln.start = n.beat; ln.length = n.length; ln.velocity = juce::jlimit (1, 127, (int) std::round (n.velocity * 127.0f));
+                if ((Lane) l == Lane::Drums)
+                {
+                    ln.pitch = prof.role == TrackRole::Drums || prof.role == TrackRole::Perc ? remapDrum (n.pitch, prof.drums) : n.pitch;
+                    if (ln.pitch < 0) { ++dropped; continue; }
+                }
+                else ln.pitch = juce::jlimit (0, 127, n.pitch + shift);
+                part.notes.push_back (ln);
+            }
+            clampNotes (part.notes, part.bars * bpb);
+            if (dropped > 0)
+                plan.manual.add (s.name + " / " + p.tracks[(size_t) target[l]].name + " : " + juce::String (dropped)
+                                 + utf8 (" coup(s) sans pad correspondant dans ton kit, non écrits."));
+            s.cells[(size_t) target[l]].parts.push_back (std::move (part));
+        }
+        plan.sections.push_back (std::move (s));
+    }
+    juce::StringArray map;
+    for (int l = 0; l < numMidiLanes; ++l)
+        map.add (juce::String (laneName ((Lane) l)) + utf8 (" → ") + (target[l] >= 0 ? p.tracks[(size_t) target[l]].name : utf8 ("(aucune piste : non envoyé)")));
+    plan.explain.add (utf8 ("ESQUISSE envoyée sur TES pistes (validé avant l'envoi) : ") + map.joinIntoString (", ") + ".");
+    if (shift != 0) plan.explain.add (utf8 ("Transposée de ") + juce::String (shift) + utf8 (" demi-ton(s) pour être dans la tonalité de ton projet (") + a.keyName() + ").");
+    plan.explain.add (utf8 ("Batterie : chaque coup va sur le pad équivalent de TON kit (kick, clap/snare, charleys). Aucun instrument n'est chargé ni remplacé."));
+    plan.valid = true;
+    return plan;
 }
 }

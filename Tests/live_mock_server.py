@@ -39,6 +39,8 @@ def main():
         time.sleep(0.03)
     with open(os.path.join(home, "final_state.json"), "w") as f:
         json.dump(state(song), f)
+    with open(os.path.join(home, "transport.json"), "w") as f:
+        json.dump({"played_from": getattr(song, "played_from", None)}, f)
     print("mock Live stopped after %d request(s)" % requests, flush=True)
 
 

@@ -2,7 +2,7 @@
 #include "../Compose/ArrangementExport.h"
 #include "../Compose/ComposeTypes.h"
 
-static constexpr const char* currentScriptVersion = "3.0";
+static constexpr const char* currentScriptVersion = "3.1";
 
 juce::File LiveBridge::inbox() { return ArrangementExport::liveInbox(); }
 
@@ -110,6 +110,14 @@ bool LiveBridge::requestSnapshot (juce::String& error) { return send (object(), 
 bool LiveBridge::requestPing (juce::String& error)     { return send (object(), "ping", error); }
 bool LiveBridge::requestApply (juce::var request, juce::String& error) { return send (request, "apply", error); }
 
+bool LiveBridge::requestPlay (double beat, bool stop, juce::String& error)
+{
+    auto r = object();
+    r.getDynamicObject()->setProperty ("beat", beat);
+    r.getDynamicObject()->setProperty ("stop", stop);
+    return send (r, "play", error);
+}
+
 bool LiveBridge::requestUndo (const juce::String& applyId, juce::String& error)
 {
     auto r = object();
@@ -169,6 +177,27 @@ juce::String LiveBridge::Response::describe() const
             for (auto& x : *a) s << "\n  - " << x.toString();
         }
     };
+    auto fid = report["fidelity"];
+    if (fid.isObject())
+    {
+        if ((bool) fid["devicesUnchanged"])
+            s << utf8 ("\nFIDÉLITÉ : aucun de tes instruments, presets, plug-ins ou effets n'a été ajouté, remplacé ni modifié.");
+        else if (auto* ch = fid["changed"].getArray())
+        {
+            juce::StringArray names;
+            for (auto& x : *ch) names.add (x.toString());
+            s << utf8 ("\nATTENTION : des réglages ont changé pendant l'envoi sur ") << names.joinIntoString (", ")
+              << utf8 (" (peut-être toi dans Live au même moment ?). Vérifie, ou ANNULER L'ENVOI.");
+        }
+        if (auto* nt = fid["newTracks"].getArray(); nt != nullptr && ! nt->isEmpty())
+        {
+            juce::StringArray names;
+            for (auto& x : *nt) names.add (x.toString());
+            s << utf8 ("\nPistes ajoutées : ") << names.joinIntoString (", ")
+              << utf8 (" (copie exacte de ta piste pour les roulements ; « FINISH FX » seulement si SONS FINISH est activé).");
+        }
+    }
+    list ("fresh", utf8 ("Écrit dans un clip neuf (ton instrument, mais sans les enveloppes de ton clip d'origine) :"));
     list ("skipped", utf8 ("Non écrit (place déjà prise par tes clips) :"));
     list ("manual", utf8 ("À faire toi-même :"));
     list ("errors", utf8 ("Erreurs :"));

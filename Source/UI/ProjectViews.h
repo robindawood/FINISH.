@@ -56,12 +56,13 @@ public:
     void resized() override;
     void refresh();
     void confirmAndSend();
+    void confirmAndListen();
     std::function<void()> onChange;
 
 private:
     FINISHAudioProcessor& proc;
     juce::TextEditor text;
-    juce::TextButton read, listen, stop, previous, send, undoSend, journal;
+    juce::TextButton read, listen, stop, previous, send, undoSend, journal, sounds, preview, finishFx;
     int shownAnswer = -1;
     bool showingJournal = false;
 };

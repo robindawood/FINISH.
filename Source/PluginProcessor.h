@@ -101,6 +101,10 @@ public:
     void showProject (LiveProject p);             // a set read elsewhere (tests, screenshots)
     void editProject (const std::function<void (ProjectSession&)>& change);
     void sendProjectToLive();                     // after the user confirmed
+    void listenInLive();                          // write + play Live from just before the new parts (real sounds)
+    void stopEverything();                        // plugin preview + Live transport
+    void showSoundInventory();
+    bool takeListenConfirmRequest() { const bool r = listenConfirmRequested; listenConfirmRequested = false; return r; }
     void undoProjectSend();
     void previewProject (int section, bool loop); // approximate preview of new sections (-1 = all)
     int takePageRequest() { const int r = pageRequest; pageRequest = -1; return r; }
@@ -223,7 +227,7 @@ private:
 
     // Project mode
     ProjectSession project;
-    bool sendConfirmRequested = false;
+    bool sendConfirmRequested = false, listenConfirmRequested = false;
     int pageRequest = -1;
     juce::String pendingProjectCommand;
     std::deque<float> tpHistory;

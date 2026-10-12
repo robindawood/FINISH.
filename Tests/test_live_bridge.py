@@ -204,7 +204,7 @@ def run(request_path, arrangement_api):
         assert all(n.startswith("FINISH ") for n in names) and len(names) == len(req["sections"]), names
     assert got == expected_notes, "notes lost: %d of %d" % (got, expected_notes)
     loaded = [d for t in new for d in t.devices]
-    assert len(loaded) == len([t for t in req["tracks"] if t["kind"] == "midi"]), "instruments not loaded: %s" % loaded
+    assert not loaded, "a substitute instrument was loaded: %s" % loaded
     print("  %-11s %s | instruments %s | warnings %d" % ("arrangement" if arrangement_api else "session", resp["message"], loaded, len(resp["warnings"])))
     shutil.rmtree(home, ignore_errors=True)
 

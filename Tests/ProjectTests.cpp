@@ -163,7 +163,7 @@ void testPlanEnrich()
     {
         if (op["op"].toString() == "cue") ++cues;
         if (op["op"].toString() == "newTrack" || op["op"].toString() == "altTrack") ++newTracks;
-        if (op["op"].toString() == "clip") { if (op.hasProperty ("source")) ++copies; else ++varied; }
+        if (op["op"].toString() == "clip") { if (op.hasProperty ("notes")) ++varied; else ++copies; }
     }
     CHECK (cues == 4, "a locator per new section");
     CHECK (newTracks == 0, "ENRICHIR adds no track");
@@ -250,8 +250,73 @@ void testPlanLevelsAndConstraints()
         if (op["op"].toString() == "altTrack") ++alt;
         if (op["op"].toString() == "clip" && op.hasProperty ("file") && juce::File (op["file"].toString()).existsAsFile()) ++fx;
     }
-    CHECK (alt == 1 && fx >= 3, "alt drum track + FX clips (" << alt << ", " << fx << ")");
+    CHECK (alt == 1 && fx == 0, "AMELIORER: copy of the user's drum track, no FINISH sound by default (" << alt << ", " << fx << ")");
+    int variedWithSource = 0, varied = 0;
+    for (auto& op : *req["ops"].getArray())
+        if (op["op"].toString() == "clip" && op.hasProperty ("notes") && ! op["track"].toString().startsWith ("@"))
+        {
+            ++varied;
+            if (op.hasProperty ("source") && op.hasProperty ("unit")) ++variedWithSource;
+        }
+    CHECK (varied > 5 && variedWithSource == varied, "every variation is built on a copy of the user's clip (" << variedWithSource << "/" << varied << ")");
     out.getChildFile ("plan_request_improve.json").replaceWithText (juce::JSON::toString (req));
+    {
+        PlanOptions fxOn;
+        fxOn.level = Level::Improve;
+        fxOn.finishFx = true;
+        auto planFx = ProjectPlanner::makePlan (p, a, fxOn);
+        auto reqFx = ProjectPlanner::buildApplyRequest (planFx, p, a, "plan-fx", out.getChildFile ("fx"), 44100.0, notesOut);
+        int fxClips = 0;
+        for (auto& op : *reqFx["ops"].getArray())
+            if (op["op"].toString() == "clip" && op.hasProperty ("file") && juce::File (op["file"].toString()).existsAsFile()) ++fxClips;
+        CHECK (fxClips >= 3, "SONS FINISH on: FX track with risers/impacts (" << fxClips << ")");
+    }
+
+    // Sound inventory
+    const auto inv = ProjectAnalyzer::soundInventory (a, p);
+    CHECK (inv.contains ("Dreamy Oboe") && inv.contains ("Kick.wav") && inv.contains ("F1 Freq") && inv.contains (utf8 ("aucun par défaut")),
+           "sound inventory lists presets, samples, automation, and the no-foreign-sound rule");
+
+    // ESQUISSE routed onto the user's own tracks
+    {
+        Arrangement sk;
+        sk.bpm = 115.0;
+        GenSection g;
+        g.role = Role::Break; g.name = "BREAK"; g.bars = 8;
+        for (int b = 0; b < 8; ++b)
+        {
+            for (int k = 0; k < 4; ++k) g.clips[(size_t) Lane::Drums].notes.push_back ({ b * 4.0 + k, 0.2, 36, 1.0f });
+            g.clips[(size_t) Lane::Drums].notes.push_back ({ b * 4.0 + 1, 0.2, 38, 0.9f });
+            g.clips[(size_t) Lane::Drums].notes.push_back ({ b * 4.0 + 0.5, 0.2, 42, 0.7f });
+            g.clips[(size_t) Lane::Drums].notes.push_back ({ b * 4.0, 0.5, 49, 0.8f });   // crash: the user's kit has none
+            g.clips[(size_t) Lane::Bass].notes.push_back ({ b * 4.0, 1.0, 33, 0.9f });    // A in A minor
+            g.clips[(size_t) Lane::Lead].notes.push_back ({ b * 4.0, 1.0, 69, 0.8f });
+        }
+        sk.sections.push_back (g);
+        sk.layout();
+        auto sp = ProjectPlanner::planFromSketch (sk, 9, true, p, a);
+        CHECK (sp.valid && sp.newSectionCount() == 1, "sketch plan");
+        const PlanSection* ns = nullptr;
+        for (auto& sec : sp.sections) if (! sec.existing) ns = &sec;
+        if (ns != nullptr)
+        {
+            const auto& drumsCell = ns->cells[(size_t) trackIndex (p, "Flavonoid Drums")];
+            std::set<int> pitches;
+            for (auto& part : drumsCell.parts) for (auto& n : part.notes) pitches.insert (n.pitch);
+            CHECK ((pitches == std::set<int> { 36, 39, 42 }), "sketch drums land on the user's own pads (kick 36, clap 39, hat 42)");
+            const auto& bassCell = ns->cells[(size_t) trackIndex (p, "Vintage Low Synth")];
+            CHECK (! bassCell.parts.empty() && ! bassCell.parts[0].notes.empty() && bassCell.parts[0].notes[0].pitch == 38,
+                   "sketch bass on the user's bass track, transposed into D minor");
+            CHECK (! ns->cells[(size_t) trackIndex (p, "Oboe")].parts.empty(), "sketch lead on the user's lead track");
+            bool crashReported = false;
+            for (auto& m : sp.manual) crashReported |= m.contains ("sans pad");
+            CHECK (crashReported, "a hit with no matching pad is reported, not replaced");
+            auto sreq = ProjectPlanner::buildApplyRequest (sp, p, a, "sketch", out.getChildFile ("fx"), 44100.0, notesOut);
+            int newTracks = 0;
+            for (auto& op : *sreq["ops"].getArray()) if (op["op"].toString() == "newTrack") ++newTracks;
+            CHECK (newTracks == 0, "the sketch adds no track and loads no instrument");
+        }
+    }
 
     // 3 versions of a build
     std::set<juce::String> versions;
@@ -358,6 +423,7 @@ void testLiveEndToEnd()
     CHECK (pump ([&] { return s.takeLiveResult(); }, 15.0), "Live answered the apply");
     std::cout << "  " << s.getLastReport().replace ("\n", "\n  ") << "\n";
     CHECK (s.getLastReport().contains ("clips ecrits"), "clips written");
+    CHECK (s.getLastReport().contains (utf8 ("FIDÉLITÉ")), "fidelity verified after writing: no instrument or effect changed");
     CHECK (pump ([&] { return s.getPhase() == ProjectSession::Phase::Ready; }, 15.0), "set read again after writing");
     const int clipsAfter = s.getProject().countClips (true);
     {
@@ -371,7 +437,23 @@ void testLiveEndToEnd()
     CHECK (s.getLastReport().contains ("annule"), "send undone: " << s.getLastReport());
     CHECK (pump ([&] { return s.getPhase() == ProjectSession::Phase::Ready && s.getProject().countClips (true) == clipsBefore; }, 15.0),
            "back to the original set (" << s.getProject().countClips (true) << " clips)");
+    // Hear it in Live with the project's real sounds: write, play from 2 bars before the new parts, then undo.
+    CHECK (s.sendAndListen (48000.0, err), "write + listen: " << err);
+    CHECK (pump ([&] { return s.takeLiveResult(); }, 15.0), "Live answered the audition write");
+    std::cout << "  " << s.getLastReport().replace ("\n", "\n  ") << "\n";
+    CHECK (s.getLastReport().contains ("Automation") && s.getLastReport().contains ("F1 Freq"),
+           "the bass filter automation that cannot be extended is reported");
+    CHECK (pump ([&] { return s.getPhase() == ProjectSession::Phase::Ready && s.hasSent(); }, 15.0), "audition finished");
+    CHECK (s.undoSend (err), "undo after audition");
+    CHECK (pump ([&] { return s.takeLiveResult(); }, 15.0), "undo answered");
+    pump ([&] { return s.getPhase() == ProjectSession::Phase::Ready; }, 15.0);
     juce::File (home).getChildFile ("stop").create();
+    juce::Thread::sleep (300);
+    {
+        const auto tr = juce::JSON::parse (juce::File (home).getChildFile ("transport.json").loadFileAsString());
+        const double from = (double) tr.getProperty ("played_from", -1.0);
+        CHECK (std::abs (from - 22.0 * 4.0) < 1e-6, "Live played from bar 23, 2 bars before the new parts (got beat " << from << ")");
+    }
     for (auto& e : s.getJournal()) std::cout << "  journal: " << e.text.upToFirstOccurrenceOf ("\n", false, false) << "\n";
 }
 }

@@ -84,9 +84,23 @@ bool ProjectSession::tick()
         if (r.ok)
             if (auto* manual = r.report["manual"].getArray())
                 for (auto& m : *manual) log (Entry::Kind::Manual, m.toString());
-        // Read the set again so the analysis matches what is now in Live.
         juce::String e;
         autoPlanAfterRead = false;
+        if (r.ok && auditionPending)
+        {
+            // Hear it with the project's real sounds: play from two bars before the new parts.
+            auditionPending = false;
+            const double beat = juce::jmax (0, plan.firstNewBar - 2) * plan.beatsPerBar;
+            if (bridge.requestPlay (beat, false, e))
+            {
+                log (Entry::Kind::Info, utf8 ("Lecture dans Live à la mesure ") + juce::String (juce::jmax (0, plan.firstNewBar - 2) + 1)
+                                        + utf8 (" : ce sont tes vrais sons. Garde, ou ANNULER L'ENVOI."));
+                phase = Phase::Sending;
+                return true;
+            }
+        }
+        auditionPending = false;
+        // Read the set again so the analysis matches what is now in Live.
         bridge.requestSnapshot (e);
         phase = Phase::Reading;
         return true;
@@ -102,6 +116,17 @@ bool ProjectSession::tick()
         bridge.requestSnapshot (e);
         phase = Phase::Reading;
         return true;
+    }
+    if (r.type == "play")
+    {
+        juce::String e;
+        if (phase == Phase::Sending)   // after an audition: now read the set again
+        {
+            autoPlanAfterRead = false;
+            bridge.requestSnapshot (e);
+            phase = Phase::Reading;
+            return true;
+        }
     }
     phase = plan.valid ? Phase::Ready : Phase::Idle;
     autoPlanAfterRead = true;
@@ -127,6 +152,7 @@ void ProjectSession::replan (bool keepHistory, const std::set<TrackRole>& onlyCh
         if (history.size() > 30) history.erase (history.begin());
     }
     auto previous = plan;
+    sketchPlan = false;
     plan = ProjectPlanner::makePlan (project, analysis, options);
     if (! onlyChange.empty() && previous.valid)
     {
@@ -211,6 +237,11 @@ ProjectSession::Outcome ProjectSession::apply (const ProjectCommand& cmd)
     {
         case K::None: break;
         case K::Send: out.wantsSend = true; break;
+        case K::Listen: out.wantsListen = true; break;
+        case K::Inventory:
+            if (needProject()) break;
+            out.answer = ProjectAnalyzer::soundInventory (analysis, project);
+            break;
         case K::UndoSend: out.wantsUndoSend = true; break;
         case K::KeepPrevious:
             out.answer = undoPlan() ? utf8 ("Version précédente du plan rétablie.") : utf8 ("Pas de version précédente.");
@@ -309,6 +340,7 @@ juce::String ProjectSession::confirmText() const
     s << utf8 ("\nSur tes pistes : ") << tracks.joinIntoString (", ") << "\n";
     if (! plan.layers.empty()) s << utf8 ("+ une copie vide de ta piste ") << project.tracks[(size_t) plan.layers[0].track].name << utf8 (" pour les roulements\n");
     for (auto& sec : plan.sections) if (! sec.existing && ! sec.fx.empty()) { s << utf8 ("+ une piste FINISH FX (risers, impacts)\n"); break; }
+    s << utf8 ("\nTes instruments, presets, plug-ins et effets sont utilisés tels quels : rien n'est chargé ni remplacé.");
     s << utf8 ("\nAucun de tes clips n'est modifié ni déplacé. Une place déjà occupée est sautée. Annulable (bouton ANNULER L'ENVOI ou Cmd/Ctrl+Z dans Live).");
     return s;
 }
@@ -325,6 +357,42 @@ bool ProjectSession::send (double sampleRate, juce::String& error)
     for (auto& n : notes) log (Entry::Kind::Manual, n);
     if (! bridge.requestApply (req, error)) return false;
     phase = Phase::Sending;
+    ++version;
+    return true;
+}
+
+bool ProjectSession::sendAndListen (double sampleRate, juce::String& error)
+{
+    if (! send (sampleRate, error)) return false;
+    auditionPending = true;
+    return true;
+}
+
+bool ProjectSession::stopLive (juce::String& error)
+{
+    if (! diag.connected() || bridge.busy()) return false;
+    return bridge.requestPlay (0.0, true, error);
+}
+
+void ProjectSession::setFinishFx (bool on)
+{
+    if (options.finishFx == on) return;
+    options.finishFx = on;
+    log (Entry::Kind::Info, on ? utf8 ("SONS FINISH activés : risers et impacts de FINISH (pas de ton projet) sur une piste FINISH FX.")
+                               : utf8 ("SONS FINISH désactivés : uniquement les sons de ton projet."));
+    replan();
+}
+
+bool ProjectSession::loadSketchPlan (const Arrangement& sketch, int keyRoot, bool minor, juce::String& error)
+{
+    if (! analysis.valid) { error = utf8 ("Lis d'abord ton projet (FINISH, page PROJET)."); return false; }
+    auto p = ProjectPlanner::planFromSketch (sketch, keyRoot, minor, project, analysis);
+    if (! p.valid) { error = utf8 ("Rien à envoyer."); return false; }
+    if (plan.valid) history.push_back ({ options, plan });
+    plan = std::move (p);
+    sketchPlan = true;
+    log (Entry::Kind::Generated, utf8 ("Esquisse routée sur tes pistes : ") + juce::String (plan.countWrites()) + utf8 (" clip(s) à écrire."));
+    phase = Phase::Ready;
     ++version;
     return true;
 }

@@ -427,6 +427,11 @@ void FINISHAudioProcessorEditor::timerCallback()
         if (page != projectPage) setPage (projectPage);
         projectConsole.confirmAndSend();
     }
+    if (proc.takeListenConfirmRequest())
+    {
+        if (page != projectPage) setPage (projectPage);
+        projectConsole.confirmAndListen();
+    }
     if (page == projectPage && proc.isPreviewingProject()) projectView.repaint();
     if (proc.getAnswerVersion() != lastAnswerVersion || proc.getProject().getVersion() != lastProjectVersion) refreshAll();
     if (page == sections) trackMap.repaint();

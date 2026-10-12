@@ -74,6 +74,9 @@ namespace ProjectAnalyzer
     ProjectAnalysis analyse (LiveProject& project);
     // Human report for "écoute et analyse ce que j'ai créé, dis-moi ce qui manque".
     juce::String report (const ProjectAnalysis& a, const LiveProject& p);
+    // The sound of the project, track by track: instruments / presets / plug-ins / effects / samples / automation,
+    // and how FINISH keeps each of them.
+    juce::String soundInventory (const ProjectAnalysis& a, const LiveProject& p);
     // Diatonic helper used by the variations.
     int scaleStep (int pitch, int steps, int keyRoot, bool minor);
     float energyWeight (TrackRole r);

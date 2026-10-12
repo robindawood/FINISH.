@@ -1,6 +1,6 @@
 ; Windows installer for FINISH (Inno Setup 6). Built by .github/workflows/build.yml.
 #ifndef AppVersion
-  #define AppVersion "3.0.0"
+  #define AppVersion "3.1.0"
 #endif
 
 [Setup]

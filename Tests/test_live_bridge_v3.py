@@ -45,6 +45,8 @@ class MockClip(object):
         self.color = 0
         self.file_path = file_path
         self.warping = True
+        self.gain, self.pitch_coarse = 0.4, 0
+        self.envelopes = {}          # stands for the clip's own automation envelopes
         self._notes = [MidiNote(*n) for n in (notes or [])]
 
     def get_notes_extended(self, from_pitch, pitch_span, from_time, time_span):
@@ -80,11 +82,28 @@ class MockSlot(object):
         self.clip = None
 
 
+class MockParam(object):
+    def __init__(self, name, value, automated=0):
+        self.name, self.value, self.automation_state = name, value, automated
+
+    def __str__(self):
+        return "%.2f" % self.value
+
+
 class MockDevice(object):
-    def __init__(self, name, class_name, pads=None):
-        self.name, self.class_name, self.type = name, class_name, 1
+    def __init__(self, name, class_name, pads=None, params=None, sample=None, automated=()):
+        self.name, self.class_name = name, class_name
+        self.type = 2 if class_name in ("Reverb", "Saturator", "Eq8", "Compressor2", "AutoFilter") else 1
+        self.class_display_name = {"InstrumentGroupDevice": "Instrument Rack", "DrumGroupDevice": "Drum Rack", "UltraAnalog": "Analog",
+                                   "InstrumentVector": "Wavetable", "Eq8": "EQ Eight"}.get(class_name, class_name)
         self.can_have_drum_pads = pads is not None
-        self.drum_pads = [types.SimpleNamespace(note=n, name=nm, chains=[1]) for n, nm in (pads or [])]
+        self.can_have_chains = False
+        self.parameters = [MockParam("Device On", 1.0)] + [MockParam(n, v, 1 if n in automated else 0) for n, v in (params or [("Macro 1", 0.5)])]
+        if sample:
+            self.sample = types.SimpleNamespace(file_path=sample)
+        self.drum_pads = [types.SimpleNamespace(note=n, name=nm, chains=[types.SimpleNamespace(
+            devices=[types.SimpleNamespace(name=nm, class_name="OriginalSimpler", sample=types.SimpleNamespace(file_path="/Samples/%s.wav" % nm))])])
+            for n, nm in (pads or [])]
 
 
 class MockTrack(object):
@@ -96,6 +115,7 @@ class MockTrack(object):
         self.arrangement_clips = []
         self._slots = []
         self.live12 = live12
+        self.mixer_device = types.SimpleNamespace(volume=MockParam("Volume", 0.85), panning=MockParam("Pan", 0.0), sends=[])
         if live12:
             self.create_midi_clip = self._create_midi_clip
             self.create_audio_clip = self._create_audio_clip
@@ -131,6 +151,9 @@ class MockTrack(object):
         assert (clip.is_midi_clip == self.has_midi_input) or not clip.is_midi_clip
         c = MockClip(clip.name, time, clip.length, clip.is_midi_clip, file_path=clip.file_path)
         c._notes = [MidiNote(n.pitch, n.start_time, n.duration, n.velocity) for n in clip._notes]
+        c.envelopes = dict(clip.envelopes)
+        c.loop_start, c.loop_end, c.looping = clip.loop_start, clip.loop_end, clip.looping
+        c.gain, c.pitch_coarse = clip.gain, clip.pitch_coarse
         self._check_free(c.start_time, c.end_time)
         self.arrangement_clips.append(c)
         self.arrangement_clips.sort(key=lambda c: c.start_time)
@@ -155,6 +178,13 @@ class MockSong(object):
         self.view = types.SimpleNamespace(selected_track=None, detail_clip=None)
         self.undo_steps = 0
         self._open_steps = 0
+
+    def start_playing(self):
+        self.is_playing = True
+        self.played_from = self.current_song_time
+
+    def stop_playing(self):
+        self.is_playing = False
 
     @property
     def song_length(self):
@@ -242,15 +272,19 @@ def demo_set(live12, wav_path):
         song.tracks.append(t)
         return t
 
-    oboe = add("Oboe", True, [MockDevice("Oboe", "InstrumentGroupDevice"), MockDevice("Reverb", "Reverb")])
+    oboe = add("Oboe", True, [MockDevice("Dreamy Oboe", "InstrumentGroupDevice", params=[("Brightness", 0.62), ("Space", 0.4)]),
+                              MockDevice("Reverb", "Reverb", params=[("Decay Time", 2.4), ("Dry/Wet", 0.3)])])
     oboe.arrangement_clips = [MockClip("Idea | D Minor | Dreamy | Oboe", 0.0, 64.0, notes=tile(D_MINOR_MOTIF, 8.0, 8)),
                               MockClip("Idea | D Minor | Dreamy | Oboe", 64.0, 32.0, notes=tile(D_MINOR_MOTIF, 8.0, 4))]
+    for c in oboe.arrangement_clips:
+        c.envelopes = {"Brightness": [(0.0, 0.3), (8.0, 0.8)]}
     keys = add("Key Synth Pad", True, [MockDevice("Wavetable", "InstrumentVector")])
     keys.arrangement_clips = [MockClip("MIDI Key Synth Pad", 0.0, 64.0, notes=tile(CHORDS, 16.0, 4)),
                               MockClip("MIDI Key Synth Pad", 64.0, 32.0, notes=tile(CHORDS, 16.0, 2))]
     flute = add("Flute", True, [MockDevice("Flute", "InstrumentGroupDevice")])
     flute.arrangement_clips = [MockClip("Idea | D Minor | Flute", 64.0, 32.0, notes=tile(FLUTE, 8.0, 4))]
-    bass = add("Vintage Low Synth", True, [MockDevice("Analog", "UltraAnalog"), MockDevice("Saturator", "Saturator")])
+    bass = add("Vintage Low Synth", True, [MockDevice("Vintage Low Synth", "UltraAnalog", params=[("F1 Freq", 0.35), ("F1 Reso", 0.2)], automated=("F1 Freq",)),
+                                            MockDevice("Saturator", "Saturator", params=[("Drive", 0.5)])])
     bass.arrangement_clips = [MockClip("Low Synth D min", 64.0, 32.0, notes=tile(BASS, 16.0, 2))]
     drums = add("Flavonoid Drums", True, [MockDevice("Flavonoid Kit", "DrumGroupDevice",
                                                    [(36, "Kick"), (39, "Clap"), (42, "Closed Hat"), (46, "Open Hat")])])
@@ -259,7 +293,7 @@ def demo_set(live12, wav_path):
     perc.arrangement_clips = [MockClip("Escape Perc Snaps", 64.0, 32.0, notes=tile(PERC, 4.0, 8))]
     clap = add("Doppler Clap", True, [MockDevice("Doppler Clap", "DrumGroupDevice", [(39, "Clap")])])
     clap.arrangement_clips = [MockClip("Doppler2 Clap", 64.0, 32.0, notes=tile(CLAP, 4.0, 8))]
-    hats = add("Uplifting House Hat", False, [MockDevice("EQ Eight", "Eq8")])
+    hats = add("Uplifting House Hat", False, [MockDevice("EQ Eight", "Eq8", params=[("1 Gain A", 0.0)])])
     hats.arrangement_clips = [MockClip("Uplifting House Hat", 64.0, 8.0, midi=False, file_path=wav_path),
                               MockClip("Uplifting House Hat", 72.0, 8.0, midi=False, file_path=wav_path),
                               MockClip("Uplifting House Hat", 80.0, 8.0, midi=False, file_path=wav_path),
@@ -340,7 +374,7 @@ def run_v3(apply_path=None, live12=True):
     tag = "live12" if live12 else "live11"
 
     hb = json.load(open(os.path.join(inbox, "bridge.json")))
-    assert hb["alive"] and hb["version"] == "3.0", hb
+    assert hb["alive"] and hb["version"] == "3.1", hb
     assert hb["caps"]["duplicate_to_arrangement"]
     assert hb["caps"]["create_midi_clip"] == live12
 
@@ -356,10 +390,15 @@ def run_v3(apply_path=None, live12=True):
     expected = sum(len(c._notes) for t in song.tracks for c in t.arrangement_clips) + len(D_MINOR_MOTIF)
     assert total_notes == expected, (total_notes, expected)
     drums = proj["tracks"][4]
-    assert drums["devices"][0]["class"] == "DrumGroupDevice" and [36, "Kick"] in drums["devices"][0]["pads"]
+    assert drums["devices"][0]["class"] == "DrumGroupDevice" and [36, "Kick"] in [p[:2] for p in drums["devices"][0]["pads"]]
     assert proj["tracks"][7]["midi"] is False and proj["tracks"][7]["arrangement"][0]["file"] == wav
     assert proj["tracks"][0]["session"][0]["name"] == "Oboe idea B"
     assert proj["selectedTrack"] == 0
+    # The sound inventory: instruments, presets, parameters, samples, automation
+    oboe_dev = proj["tracks"][0]["devices"][0]
+    assert oboe_dev["name"] == "Dreamy Oboe" and ["Brightness", 0.62] == oboe_dev["params"][1][:2], oboe_dev
+    assert proj["tracks"][3]["devices"][0]["automated"] == ["F1 Freq"]
+    assert drums["devices"][0]["pads"][0][2] == "/Samples/Kick.wav"
 
     before = {t.name: [c.signature() for c in t.arrangement_clips] for t in song.tracks}
 
@@ -372,7 +411,9 @@ def run_v3(apply_path=None, live12=True):
     else:
         req = {"type": "apply", "id": "a1", "ops": [
             {"op": "clip", "track": 0, "trackName": "Oboe", "start": 96.0, "length": 32.0, "name": "FINISH BREAK",
-             "notes": [[62, 0.0, 4.0, 90], [65, 4.0, 4.0, 90]]},
+             "notes": [[62, 0.0, 4.0, 90], [65, 4.0, 4.0, 90]], "source": {"where": "arrangement", "start": 64.0}, "unit": 32.0},
+            {"op": "clip", "track": 3, "trackName": "Vintage Low Synth", "start": 96.0, "length": 32.0, "name": "FINISH BREAK",
+             "notes": [[38, 16.0, 16.0, 100]], "source": {"where": "arrangement", "start": 64.0}, "unit": 32.0},
             {"op": "clip", "track": 4, "trackName": "Flavonoid Drums", "start": 128.0, "length": 32.0, "name": "FINISH DROP 2",
              "source": {"where": "arrangement", "start": 64.0}},
             {"op": "clip", "track": 7, "trackName": "Uplifting House Hat", "start": 128.0, "length": 16.0,
@@ -398,8 +439,20 @@ def run_v3(apply_path=None, live12=True):
                 assert sig in now, "user clip modified on %s" % t.name
     added = sum(len(t.arrangement_clips) for t in song.tracks) - sum(len(v) for v in before.values())
     assert added > 0
+    fid = rep["fidelity"]
+    assert fid["devicesUnchanged"] and not fid["changed"], fid
     if not apply_path:
         assert any("occupees" in s for s in rep["skipped"]), rep
+        if live12 or True:
+            var = next(c for c in song.tracks[0].arrangement_clips if abs(c.start_time - 96.0) < 1e-6)
+            assert var.envelopes == {"Brightness": [(0.0, 0.3), (8.0, 0.8)]}, "variation lost the clip envelopes"
+            assert sorted((n.pitch, n.start_time) for n in var._notes) == [(62, 0.0), (65, 4.0)], var._notes
+            assert var.name == "FINISH BREAK"
+            assert any("F1 Freq" in a for a in fid["automation"]), fid
+    pr = roundtrip(bridge, inbox, {"type": "play", "id": "p1", "beat": 88.0})
+    assert pr["ok"] and song.is_playing and abs(song.current_song_time - 88.0) < 1e-9
+    roundtrip(bridge, inbox, {"type": "play", "id": "p2", "stop": True})
+    assert not song.is_playing
     assert len(song.scenes) == 4, "temporary scenes left behind"
     # No overlaps anywhere
     for t in song.tracks:

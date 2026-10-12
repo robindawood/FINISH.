@@ -27,8 +27,9 @@ try:
 except Exception:  # pragma: no cover - tests outside Live
     Live = None
 
-BRIDGE_VERSION = "3.0"
+BRIDGE_VERSION = "3.1"
 POLL_EVERY = 3          # update_display ticks (~100 ms each)
+MAX_PARAMS = 48
 HEARTBEAT_EVERY = 20
 MAX_NOTES_PER_CLIP = 6000
 EPS = 1e-4
@@ -143,6 +144,8 @@ class FinishBridge(object):
                 response = self._apply(request)
             elif kind == "undo":
                 response = self._undo(request)
+            elif kind == "play":
+                response = self._play(request)
             elif kind == "ping":
                 response = {"ok": True, "message": "FINISH connecte a Live %s" % self._live_version()}
             else:
@@ -266,18 +269,73 @@ class FinishBridge(object):
         else:
             info["file"] = _safe(lambda: clip.file_path, "") or ""
             info["warping"] = _safe(lambda: bool(clip.warping), False)
+            info["gain"] = _safe(lambda: float(clip.gain), 0.0)
+            info["pitch"] = _safe(lambda: int(clip.pitch_coarse), 0)
         return info
 
-    def _device_info(self, d):
-        info = {"name": _safe(lambda: d.name, ""), "class": _safe(lambda: d.class_name, ""),
-                "type": _safe(lambda: int(d.type), 0)}
+    def _param_info(self, p):
+        return [_safe(lambda: p.name, ""), _safe(lambda: round(float(p.value), 4), 0.0), _safe(lambda: str(p), ""),
+                int(_safe(lambda: int(p.automation_state), 0) or 0)]
+
+    def _device_info(self, d, depth=0):
+        cls = _safe(lambda: d.class_name, "")
+        info = {"name": _safe(lambda: d.name, ""), "class": cls,
+                "display": _safe(lambda: d.class_display_name, "") or "",
+                "type": _safe(lambda: int(d.type), 0),
+                "on": bool(_safe(lambda: d.parameters[0].value, 1)),
+                "plugin": cls in ("PluginDevice", "AuPluginDevice", "MxDeviceAudioEffect", "MxDeviceInstrument", "MxDeviceMidiEffect")}
+        params = _safe(lambda: list(d.parameters), [])
+        info["params"] = [self._param_info(p) for p in params[:MAX_PARAMS]]
+        info["automated"] = [p[0] for p in (self._param_info(x) for x in params) if p[3] != 0]
+        sample = _safe(lambda: d.sample, None)
+        if sample is not None:
+            info["sample"] = _safe(lambda: sample.file_path, "") or ""
         if _safe(lambda: d.can_have_drum_pads, False):
             pads = []
             for p in _safe(lambda: list(d.drum_pads), []):
-                if _safe(lambda: len(p.chains), 0) > 0:
-                    pads.append([_safe(lambda: int(p.note), 0), _safe(lambda: p.name, "")])
+                chains = _safe(lambda: list(p.chains), [])
+                if chains:
+                    pad = [_safe(lambda: int(p.note), 0), _safe(lambda: p.name, "")]
+                    sm = ""
+                    for ch in chains[:1]:
+                        for dv in _safe(lambda: list(ch.devices), [])[:2]:
+                            smp = _safe(lambda: dv.sample, None)
+                            if smp is not None:
+                                sm = _safe(lambda: smp.file_path, "") or ""
+                    pad.append(sm)
+                    pads.append(pad)
             info["pads"] = pads
+        elif depth < 2 and _safe(lambda: d.can_have_chains, False):
+            info["chains"] = [{"name": _safe(lambda: ch.name, ""),
+                               "devices": [self._device_info(x, depth + 1) for x in _safe(lambda: list(ch.devices), [])[:8]]}
+                              for ch in _safe(lambda: list(d.chains), [])[:8]]
         return info
+
+    def _signature(self, track):
+        """What makes the track's sound: device classes, names, on/off and parameter values."""
+        def dev(d, depth=0):
+            parts = [_safe(lambda: d.class_name, ""), _safe(lambda: d.name, "")]
+            for p in _safe(lambda: list(d.parameters), [])[:MAX_PARAMS]:
+                parts.append("%.4f" % _safe(lambda: float(p.value), 0.0))
+            if depth < 2 and _safe(lambda: d.can_have_chains, False):
+                for ch in _safe(lambda: list(d.chains), []):
+                    for x in _safe(lambda: list(ch.devices), []):
+                        parts.append("[" + dev(x, depth + 1) + "]")
+            return "|".join(parts)
+        return ";".join(dev(d) for d in _safe(lambda: list(track.devices), []))
+
+    def _mixer_automation(self, track):
+        out = []
+        mixer = _safe(lambda: track.mixer_device, None)
+        if mixer is None:
+            return out
+        for label, p in (("Volume", _safe(lambda: mixer.volume, None)), ("Pan", _safe(lambda: mixer.panning, None))):
+            if p is not None and int(_safe(lambda: int(p.automation_state), 0) or 0) != 0:
+                out.append(label)
+        for i, p in enumerate(_safe(lambda: list(mixer.sends), [])):
+            if int(_safe(lambda: int(p.automation_state), 0) or 0) != 0:
+                out.append("Send %s" % chr(65 + i))
+        return out
 
     def _track_info(self, track, index, selected):
         is_midi = bool(_safe(lambda: track.has_midi_input, False))
@@ -290,6 +348,7 @@ class FinishBridge(object):
             "frozen": bool(_safe(lambda: track.is_frozen, False)),
             "selected": track == selected,
             "devices": [self._device_info(d) for d in _safe(lambda: list(track.devices), [])],
+            "mixerAutomation": self._mixer_automation(track),
             "arrangement": [], "session": [],
         }
         if hasattr(track, "arrangement_clips"):
@@ -482,6 +541,36 @@ class FinishBridge(object):
             report["written"] += 1
             report["copied"] += 1
             return
+        # Variation: a copy of the user's clip (keeps its envelopes, groove, transposition, settings) with new notes.
+        if notes is not None and src is not None and _safe(lambda: src.is_midi_clip, False) \
+                and hasattr(track, "duplicate_clip_to_arrangement") and op.get("unit"):
+            unit = max(0.25, float(op["unit"]))
+            t = start
+            while t < start + length - EPS:
+                if t + unit > start + length + EPS:
+                    break
+                c = track.duplicate_clip_to_arrangement(src, t)
+                if c is None:
+                    c = next((x for x in track.arrangement_clips if abs(float(x.start_time) - t) < EPS), None)
+                record.append(("clip", track, t, _safe(lambda: src.name, "")))
+                if c is not None:
+                    ls = _safe(lambda: float(c.loop_start), 0.0)
+                    if _safe(lambda: bool(c.looping), False) and _safe(lambda: float(c.loop_end) - ls, unit) < unit - EPS:
+                        _safe(lambda: setattr(c, "loop_end", ls + unit))
+                    self._clear_notes(c)
+                    tile = [[n[0], n[1] - (t - start) + ls, n[2], n[3]] for n in notes if t - start - EPS <= n[1] < t - start + unit - EPS]
+                    self._add_notes(c, tile)
+                    _safe(lambda: setattr(c, "name", name))
+                t += unit
+            if t < start + length - EPS:   # what is left does not fit a whole copy of the clip: a fresh clip
+                rest = [[n[0], n[1] - (t - start), n[2], n[3]] for n in notes if n[1] >= t - start - EPS]
+                if rest:
+                    self._midi_clip_at(track, t, start + length - t, rest, name, record)
+                    report["fresh"].append("%s : mesures %d-%d dans un clip neuf (sans les enveloppes de ton clip)"
+                                           % (track.name, int(t // 4) + 1, int((start + length) // 4)))
+            report["written"] += 1
+            report["varied"] += 1
+            return
         if notes is None and src is not None and _safe(lambda: src.is_midi_clip, False):
             notes = op.get("fallbackNotes", None)
         if notes is None:
@@ -495,6 +584,9 @@ class FinishBridge(object):
             report["skipped"].append("%s : piste audio, impossible d'y ecrire des notes" % track.name)
             return
         self._midi_clip_at(track, start, length, notes, name, record)
+        if not op.get("layer"):
+                report["fresh"].append("%s : mesures %d-%d dans un clip neuf (sans les enveloppes de ton clip)"
+                                       % (track.name, int(start // 4) + 1, int((start + length) // 4)))
         report["written"] += 1
         report["varied"] += 1
 
@@ -536,7 +628,9 @@ class FinishBridge(object):
             return {"ok": False, "error": "Rien a envoyer."}
         record = []
         created_tracks = {}
-        report = {"written": 0, "copied": 0, "varied": 0, "skipped": [], "manual": [], "errors": [], "tracks": [], "cues": 0}
+        report = {"written": 0, "copied": 0, "varied": 0, "skipped": [], "manual": [], "errors": [], "tracks": [], "cues": 0,
+                  "fresh": [], "fidelity": {}}
+        before = dict((id(t), (t.name, self._signature(t))) for t in song.tracks)
         undo_step = hasattr(song, "begin_undo_step")
         if undo_step:
             _safe(song.begin_undo_step)
@@ -592,6 +686,29 @@ class FinishBridge(object):
         finally:
             if undo_step:
                 _safe(song.end_undo_step)
+        # Fidelity: none of the user's instruments or effects may have changed.
+        changed = []
+        touched = set(id(r[1]) for r in record if r[0] == "clip" and r[1] is not None)
+        for t in song.tracks:
+            if id(t) in before and before[id(t)][1] != self._signature(t):
+                changed.append(t.name)
+        automation = []
+        for t in song.tracks:
+            if id(t) not in touched or id(t) not in before:
+                continue
+            names = []
+            for d in _safe(lambda: list(t.devices), []):
+                for p in _safe(lambda: list(d.parameters), []):
+                    if int(_safe(lambda: int(p.automation_state), 0) or 0) != 0:
+                        names.append("%s / %s" % (_safe(lambda: d.name, ""), _safe(lambda: p.name, "")))
+            names += self._mixer_automation(t)
+            if names:
+                automation.append("%s : %s" % (t.name, ", ".join(names[:6])))
+        report["fidelity"] = {"devicesUnchanged": not changed, "changed": changed, "automation": automation,
+                              "newTracks": report["tracks"], "freshClips": len(report["fresh"])}
+        for a in automation:
+            report["manual"].append("Automation d'Arrangement non prolongee (l'API de Live ne permet pas de la copier) - " + a
+                                    + " : copie-la sur les nouvelles mesures (selectionne la lane, Cmd/Ctrl+C puis Cmd/Ctrl+V).")
         aid = req.get("id", "")
         self._history[aid] = record
         self._last_apply = aid
@@ -604,6 +721,17 @@ class FinishBridge(object):
         ok = report["written"] > 0 or report["cues"] > 0
         return {"ok": ok, "message": msg if ok else "Rien n'a pu etre ecrit", "report": report,
                 "undoable": True, "canDelete": hasattr(song.tracks[0], "delete_clip") if len(song.tracks) else False}
+
+    def _play(self, req):
+        song = self.song()
+        if req.get("stop"):
+            _safe(song.stop_playing)
+            return {"ok": True, "message": "lecture arretee"}
+        beat = max(0.0, float(req.get("beat", 0.0)))
+        _safe(song.stop_playing)
+        song.current_song_time = beat
+        _safe(song.start_playing)
+        return {"ok": True, "message": "lecture depuis la mesure %d" % (int(beat // 4) + 1)}
 
     def _undo(self, req):
         song = self.song()
@@ -799,11 +927,10 @@ class FinishBridge(object):
                 except Exception as e:
                     warnings.append("%s / %s : %s" % (track.name, name, e))
 
-            if kind != "audio" and req.get("loadInstruments", True):
-                loaded = self._load_instrument(track, spec.get("lane", ""))
-                instruments[track.name] = loaded or ""
-                if not loaded:
-                    warnings.append("%s : aucun instrument charge, mets %s." % (track.name, spec.get("hint", "un synthe")))
+            if kind != "audio":
+                # FINISH never loads a substitute instrument: the track stays empty until you choose its sound.
+                instruments[track.name] = ""
+                warnings.append("%s : aucun instrument charge (FINISH ne remplace jamais tes sons) - mets-y le tien." % track.name)
 
         where = ("dans l'Arrangement a partir de la mesure %d" % (int(req.get("startBar", 0)) + 1)) if mode == "arrangement" \
             else "dans de nouvelles scenes de la vue Session"

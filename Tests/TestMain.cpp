@@ -1237,6 +1237,9 @@ static void demo (const juce::File& dir)
     waitFor ([&] { return p.getProject().hasPlan() && p.getProject().getPhase() == ProjectSession::Phase::Ready; }, 15000);
     pump (500);
     writePng (*e, file ("02_read"));
+    p.showSoundInventory();
+    pump (300);
+    writePng (*e, file ("02b_sounds"));
 
     p.setIntent (utf8 ("termine mon morceau sans toucher à ma mélodie principale"));
     e->getCommandStrip().refresh();

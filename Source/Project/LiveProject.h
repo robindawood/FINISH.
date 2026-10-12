@@ -26,17 +26,34 @@ struct LiveClip
     bool looping = true, muted = false;
     std::vector<LiveNote> notes;   // MIDI only, clip time
     juce::String file;             // audio only
+    double gain = 0.0; int pitch = 0;
 
     double loopLength() const noexcept { return juce::jmax (0.25, loopEnd - loopStart); }
     double duration() const noexcept   { return session ? loopLength() : juce::jmax (0.0, end - start); }
 };
 
+struct LiveParam
+{
+    juce::String name, display;
+    double value = 0.0;
+    bool automated = false;      // automation in the Arrangement / Session
+};
+
 struct LiveDevice
 {
-    juce::String name, className;
+    juce::String name, className, displayName;   // name = preset / rack name as shown in Live
+    int type = 0;                                 // 1 instrument, 2 audio effect, 4 MIDI effect
+    bool plugin = false, on = true;
     std::vector<std::pair<int, juce::String>> pads;   // drum racks: note -> pad name
+    std::vector<juce::String> padSamples;             // same order as pads
+    juce::String sample;                              // Simpler / Sampler
+    std::vector<LiveParam> params;
+    juce::StringArray automated;
+    struct Chain { juce::String name; std::vector<LiveDevice> devices; };
+    std::vector<Chain> chains;
     bool isDrumRack() const noexcept { return className == "DrumGroupDevice"; }
     bool isInstrument() const noexcept;
+    juce::String kindLabel() const;                   // "VST/AU", "Max", "Live"
 };
 
 enum class TrackRole { Drums = 0, Perc, Bass, Chords, Lead, Pad, Fx, Vocal, Audio, Other };
@@ -50,6 +67,7 @@ struct LiveTrack
     juce::String name;
     bool midi = true, mute = false, group = false, grouped = false, frozen = false, selected = false;
     std::vector<LiveDevice> devices;
+    juce::StringArray mixerAutomation;
     std::vector<LiveClip> arrangement, session;
 
     // Filled by the analysis

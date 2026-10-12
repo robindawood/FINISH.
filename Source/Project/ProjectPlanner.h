@@ -21,7 +21,8 @@ struct PlanPart
     int startBar = 0, bars = 0;           // within the section
     std::vector<Tx> tx;                   // {Copy} = exact copy of the user's clip
     std::vector<LiveNote> notes;          // generated (relative to the part start), MIDI only
-    bool exactCopy() const noexcept { return tx.size() == 1 && tx[0] == Tx::Copy; }
+    bool fixedNotes = false;              // notes given from outside (ESQUISSE parts routed to the user's track)
+    bool exactCopy() const noexcept { return ! fixedNotes && tx.size() == 1 && tx[0] == Tx::Copy; }
 };
 
 struct PlanCell
@@ -66,6 +67,7 @@ struct PlanOptions
     int rangeBars = 0;                    // "pendant les 16 prochaines mesures" -> one rising section
     std::array<int, 10> variants {};      // per SecKind
     SectionMood mood;
+    bool finishFx = false;                // add FINISH's own sounds (risers, impacts) on a FINISH FX track: off by default
     juce::uint32 seed = 0;              // 0..2 = version 1..3
 };
 
@@ -95,6 +97,12 @@ namespace ProjectPlanner
     // The request for the bridge. FX files (one WAV per section with FX) are written into `fxFolder`.
     juce::var buildApplyRequest (const ProjectPlan& plan, const LiveProject& p, const ProjectAnalysis& a, const juce::String& id,
                                  const juce::File& fxFolder, double sampleRate, juce::StringArray& notes);
+
+    // The parts of an ESQUISSE arrangement routed onto the user's own tracks (by role), drums remapped to their pads,
+    // melodic parts transposed into the project's key. Nothing gets a substitute instrument: a part without a matching
+    // track is not sent (and listed in plan.manual).
+    ProjectPlan planFromSketch (const Arrangement& sketch, int sketchKeyRoot, bool sketchMinor,
+                                const LiveProject& p, const ProjectAnalysis& a);
 
     // An approximate preview with FINISH's built-in sounds (lanes by track role).
     Arrangement toPreview (const ProjectPlan& plan, const LiveProject& p, const ProjectAnalysis& a, bool newOnly = true);

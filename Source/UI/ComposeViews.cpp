@@ -561,7 +561,8 @@ ComposeConsole::ComposeConsole (FINISHAudioProcessor& p) : proc (p)
     newIdea.setTooltip (utf8 ("Une autre idée pour cette partie, même ADN."));
     playAll.setTooltip (utf8 ("Écouter tout l'arrangement depuis le début."));
     solo.setTooltip (utf8 ("SOLO : la préécoute remplace ce qui joue dans ton DAW. Éteint : elle s'ajoute."));
-    sendLive.setTooltip (utf8 ("Crée les pistes et les clips directement dans ton set Ableton Live (nouvelles pistes uniquement)."));
+    sendLive.setTooltip (utf8 ("Envoie l'esquisse sur TES pistes Live (ta batterie, ta basse...), avec tes instruments. Rien n'est remplacé ; "
+                               "une partie sans piste correspondante n'est pas envoyée. Confirmation demandée."));
     exportFiles.setTooltip (utf8 ("MIDI + WAV + guide dans Musique/FINISH (pour FL Studio et les autres DAW)."));
 
     playPart.onClick = [this] { if (section >= 0) proc.previewSection (section, true); if (onChange) onChange(); };

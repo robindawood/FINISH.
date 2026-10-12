@@ -134,6 +134,12 @@ ProjectCommand ProjectCommand::parse (const juce::String& raw)
     if (t.phrase ({ "annule l envoi", "annule lenvoi", "retire de live", "enleve de live", "undo send", "annule ce que tu as ecrit", "annule dans live",
                     "retire ce que tu as ecrit", "enleve ce que tu as ecrit" }))
     { c.kind = Kind::UndoSend; chip (utf8 ("ANNULER L'ENVOI")); return c; }
+    if (t.phrase ({ "quels sons", "quels instruments", "mes instruments", "mes sons", "inventaire", "liste les sons", "liste mes sons",
+                    "quels presets", "mes presets", "quels plugins", "mes plugins", "what sounds", "which instruments", "sound inventory" }))
+    { c.kind = Kind::Inventory; chip (utf8 ("SONS DU PROJET")); return c; }
+    if (t.phrase ({ "ecoute dans live", "ecouter dans live", "fais moi ecouter", "joue le dans live", "play it in live", "listen in live",
+                    "fais ecouter", "lance la lecture" }))
+    { c.kind = Kind::Listen; chip (utf8 ("ÉCOUTER DANS LIVE")); return c; }
     if (t.phrase ({ "envoie", "envoie le", "envoie dans live", "envoyer dans live", "send to live", "send it", "ecris dans live", "ecris le dans live",
                     "applique dans live", "mets le dans live", "pose le dans live", "go", "valide", "applique" }) && ! t.word ({ "analyse", "analyze" }))
     { c.kind = Kind::Send; chip (utf8 ("ENVOYER DANS LIVE")); return c; }

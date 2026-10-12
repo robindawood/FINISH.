@@ -273,7 +273,12 @@ void FINISHAudioProcessor::timerCallback()
         if (project.takeFreshPlan())
         {
             // Fresh read: show what FINISH understood and what it plans (or answer the request that triggered the read).
-            if (pendingProjectCommand.isNotEmpty())
+            if (pendingProjectCommand == "__sketch__")
+            {
+                pendingProjectCommand.clear();
+                sendArrangementToLive();
+            }
+            else if (pendingProjectCommand.isNotEmpty())
             {
                 const auto cmd = pendingProjectCommand;
                 pendingProjectCommand.clear();
@@ -543,6 +548,31 @@ void FINISHAudioProcessor::sendProjectToLive()
     ++resultVersion;
 }
 
+void FINISHAudioProcessor::listenInLive()
+{
+    stopPreview();
+    juce::String err;
+    if (project.sendAndListen (currentSampleRate.load(), err)) statusMessage = utf8 ("Écriture puis lecture dans Live (tes vrais sons)…");
+    else statusMessage = err;
+    ++resultVersion;
+}
+
+void FINISHAudioProcessor::stopEverything()
+{
+    stopPreview();
+    juce::String err;
+    project.stopLive (err);
+    ++resultVersion;
+}
+
+void FINISHAudioProcessor::showSoundInventory()
+{
+    if (! project.hasProject()) { readLiveProject(); return; }
+    setAnswer (ProjectAnalyzer::soundInventory (project.getAnalysis(), project.getProject()));
+    pageRequest = 0;
+    ++resultVersion;
+}
+
 void FINISHAudioProcessor::undoProjectSend()
 {
     juce::String err;
@@ -732,11 +762,13 @@ bool FINISHAudioProcessor::handleProjectCommand (const juce::String& text)
         return true;
     }
     if (cmd.kind == K::Send) { sendConfirmRequested = true; pageRequest = 0; ++resultVersion; return true; }
+    if (cmd.kind == K::Listen) { listenConfirmRequested = true; pageRequest = 0; ++resultVersion; return true; }
     if (cmd.kind == K::UndoSend) { undoProjectSend(); return true; }
 
     const auto out = project.apply (cmd);
     if (out.needsProject) { pendingProjectCommand = text; readLiveProject(); return true; }
     if (out.wantsSend) sendConfirmRequested = true;
+    if (out.wantsListen) listenConfirmRequested = true;
     if (out.wantsUndoSend) undoProjectSend();
     if (out.wantsMaster && getTargetIndex() == 0) applyRecommendedTarget();
     if (out.answer.isNotEmpty()) setAnswer (out.answer);
@@ -829,9 +861,36 @@ ArrangementExport::Result FINISHAudioProcessor::exportArrangement (bool revealFo
 
 void FINISHAudioProcessor::sendArrangementToLive()
 {
-    juce::String msg;
-    composer.sendToLive (currentSampleRate.load(), msg);
-    statusMessage = msg;
+    // The sketch goes onto the user's OWN tracks (their instruments), never on new tracks with substitute instruments.
+    if (! composer.hasArrangement()) return;
+    if (! project.hasProject())
+    {
+        project.refreshDiagnosis();
+        if (project.getDiagnosis().connected())
+        {
+            pendingProjectCommand = "__sketch__";
+            readLiveProject();
+            statusMessage = utf8 ("Je lis ton projet pour envoyer l'esquisse sur TES pistes…");
+        }
+        else
+        {
+            statusMessage = utf8 ("Live n'est pas connecté : FINISH n'envoie l'esquisse que sur tes propres pistes (pas d'instrument de remplacement). "
+                                  "Connecte Live (page PROJET) ou utilise EXPORT / glisser-déposer.");
+            readLiveProject();
+        }
+        ++resultVersion;
+        return;
+    }
+    juce::String err;
+    const auto& d = composer.getDNA();
+    if (project.loadSketchPlan (composer.getArrangement(), d.keyRoot, d.minor, err))
+    {
+        setAnswer (project.planText());
+        pageRequest = 0;
+        sendConfirmRequested = true;
+        statusMessage = utf8 ("Esquisse routée sur tes pistes : vérifie, puis confirme l'envoi.");
+    }
+    else statusMessage = err;
     ++resultVersion;
 }
 

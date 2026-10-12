@@ -44,6 +44,7 @@ public:
     bool requestApply (juce::var request, juce::String& error);       // request["id"] is set here
     bool requestUndo (const juce::String& applyId, juce::String& error);
     bool requestPing (juce::String& error);
+    bool requestPlay (double beat, bool stop, juce::String& error);   // start Live's transport at `beat` (or stop it)
     void cancel() { pendingId.clear(); pendingKind.clear(); }
 
     // Call regularly. True when the pending request got its answer (or timed out: ok=false, error set).

@@ -486,14 +486,20 @@ void ProjectColumn::paint (juce::Graphics& g)
 // ======================================================================================
 ProjectConsole::ProjectConsole (FINISHAudioProcessor& p) : proc (p)
 {
-    read.setButtonText (utf8 ("LIRE LE PROJET"));
-    listen.setButtonText (utf8 ("ÉCOUTER"));
+    read.setButtonText (utf8 ("LIRE"));
+    listen.setButtonText (utf8 ("ÉCOUTER DANS LIVE"));
+    sounds.setButtonText (utf8 ("SONS DU PROJET"));
+    preview.setButtonText (utf8 ("APERÇU"));
+    finishFx.setButtonText (utf8 ("SONS FINISH"));
     stop.setButtonText ("STOP");
     previous.setButtonText (utf8 ("PLAN PRÉCÉDENT"));
     send.setButtonText (utf8 ("ENVOYER DANS LIVE"));
     undoSend.setButtonText (utf8 ("ANNULER L'ENVOI"));
     journal.setButtonText ("JOURNAL");
-    for (auto* b : { &read, &listen, &stop, &previous, &send, &undoSend, &journal }) addAndMakeVisible (b);
+    for (auto* b : { &read, &listen, &stop, &previous, &send, &undoSend, &journal, &sounds, &preview, &finishFx }) addAndMakeVisible (b);
+    finishFx.setClickingTogglesState (true);
+    finishFx.getProperties().set ("led", "amber");
+    for (auto* b : { &previous, &sounds, &preview, &finishFx }) b->getProperties().set ("style", "chip");
     send.getProperties().set ("style", "primary");
     undoSend.getProperties().set ("led", "amber");
     journal.setClickingTogglesState (true);
@@ -510,15 +516,28 @@ ProjectConsole::ProjectConsole (FINISHAudioProcessor& p) : proc (p)
     addAndMakeVisible (text);
 
     read.setTooltip (utf8 ("Relire ton set Live (après tes modifications)."));
-    listen.setTooltip (utf8 ("Aperçu approximatif des nouvelles parties avec les sons de FINISH. Le vrai son : tes instruments, dans Live, après l'envoi."));
+    listen.setTooltip (utf8 ("Écrit le plan dans ton set puis lance Live juste avant les nouvelles parties : tu entends TES vrais sons. "
+                             "Ensuite tu gardes, ou ANNULER L'ENVOI."));
+    preview.setTooltip (utf8 ("Aperçu rapide DANS le plugin, avec les sons simplifiés de FINISH (pas les tiens). Pour le vrai son : ÉCOUTER DANS LIVE."));
+    sounds.setTooltip (utf8 ("Tes instruments, presets, plug-ins, effets, samples et automations, piste par piste, et comment FINISH les garde."));
+    finishFx.setTooltip (utf8 ("Désactivé : uniquement les sons de ton projet. Activé (niveau AMÉLIORER) : FINISH ajoute ses propres risers et impacts "
+                               "sur une piste FINISH FX — ce ne sont pas des sons de ton projet."));
     previous.setTooltip (utf8 ("Revenir au plan d'avant (« garde la version précédente »)."));
     send.setTooltip (utf8 ("Écrit le plan dans ton set, sur tes pistes. Rien d'existant n'est modifié. Confirmation demandée."));
     undoSend.setTooltip (utf8 ("Retire de Live tout ce que le dernier envoi a ajouté."));
     journal.setTooltip (utf8 ("Ce qui a été analysé, généré, envoyé, et ce qu'il reste à faire."));
 
     read.onClick = [this] { proc.readLiveProject(); if (onChange) onChange(); };
-    listen.onClick = [this] { proc.previewProject (-1, false); if (onChange) onChange(); };
-    stop.onClick = [this] { proc.stopPreview(); if (onChange) onChange(); };
+    listen.onClick = [this] { confirmAndListen(); };
+    preview.onClick = [this] { proc.previewProject (-1, false); if (onChange) onChange(); };
+    stop.onClick = [this] { proc.stopEverything(); if (onChange) onChange(); };
+    sounds.onClick = [this] { showingJournal = false; journal.setToggleState (false, juce::dontSendNotification); proc.showSoundInventory(); if (onChange) onChange(); };
+    finishFx.onClick = [this]
+    {
+        const bool on = finishFx.getToggleState();
+        proc.editProject ([on] (ProjectSession& s) { s.setFinishFx (on); });
+        if (onChange) onChange();
+    };
     previous.onClick = [this] { proc.editProject ([] (ProjectSession& s) { s.undoPlan(); }); if (onChange) onChange(); };
     send.onClick = [this] { confirmAndSend(); };
     undoSend.onClick = [this]
@@ -539,17 +558,32 @@ void ProjectConsole::confirmAndSend()
         juce::ModalCallbackFunction::create ([this] (int r) { if (r == 1) proc.sendProjectToLive(); if (onChange) onChange(); }));
 }
 
+void ProjectConsole::confirmAndListen()
+{
+    const auto& prj = proc.getProject();
+    if (! prj.hasPlan()) return;
+    juce::AlertWindow::showOkCancelBox (juce::MessageBoxIconType::QuestionIcon, utf8 ("Écouter dans Live"),
+        utf8 ("Pour entendre tes vrais sons, FINISH écrit le plan dans ton set puis lance Live à la mesure ")
+            + juce::String (juce::jmax (0, prj.getPlan().firstNewBar - 2) + 1)
+            + utf8 (".\nSi ça ne te plaît pas : ANNULER L'ENVOI retire tout.\n\n") + prj.confirmText(),
+        utf8 ("Écrire et écouter"), utf8 ("Pas encore"), this,
+        juce::ModalCallbackFunction::create ([this] (int r) { if (r == 1) proc.listenInLive(); if (onChange) onChange(); }));
+}
+
 void ProjectConsole::resized()
 {
     text.setBounds (14, 10, 668, getHeight() - 20);
     const int x = 704;
-    read.setBounds (x, 12, 140, 30);
-    listen.setBounds (x + 146, 12, 120, 30);
-    stop.setBounds (x + 272, 12, 70, 30);
-    journal.setBounds (x + 348, 12, 74, 30);
-    send.setBounds (x, 54, 214, 40);
-    undoSend.setBounds (x + 222, 54, 200, 40);
-    previous.setBounds (x, 106, 140, 26);
+    read.setBounds (x, 8, 76, 30);
+    listen.setBounds (x + 82, 8, 176, 30);
+    stop.setBounds (x + 264, 8, 70, 30);
+    journal.setBounds (x + 340, 8, 82, 30);
+    send.setBounds (x, 46, 214, 38);
+    undoSend.setBounds (x + 222, 46, 200, 38);
+    previous.setBounds (x, 92, 112, 24);
+    sounds.setBounds (x + 116, 92, 118, 24);
+    preview.setBounds (x + 238, 92, 80, 24);
+    finishFx.setBounds (x + 322, 92, 100, 24);
 }
 
 void ProjectConsole::refresh()
@@ -558,8 +592,11 @@ void ProjectConsole::refresh()
     const bool connected = prj.getDiagnosis().connected();
     const bool idle = prj.getPhase() == ProjectSession::Phase::Idle || prj.getPhase() == ProjectSession::Phase::Ready;
     read.setEnabled (connected && idle);
-    listen.setEnabled (prj.hasPlan());
-    stop.setEnabled (proc.isPreviewing());
+    listen.setEnabled (connected && idle && prj.hasPlan() && prj.getPlan().countWrites() > 0);
+    preview.setEnabled (prj.hasPlan());
+    sounds.setEnabled (prj.hasProject());
+    finishFx.setToggleState (prj.getOptions().finishFx, juce::dontSendNotification);
+    stop.setEnabled (proc.isPreviewing() || connected);
     send.setEnabled (connected && idle && prj.hasPlan() && prj.getPlan().countWrites() > 0);
     undoSend.setEnabled (connected && idle && prj.hasSent());
     previous.setEnabled (prj.canUndoPlan());
@@ -591,10 +628,10 @@ void ProjectConsole::paint (juce::Graphics& g)
     drawScreen (g, r.withWidth (684.0f).reduced (2.0f), 10.0f);
     auto right = r.withTrimmedLeft (692.0f);
     const auto& prj = proc.getProject();
-    auto st = juce::Rectangle<float> (right.getX() + 150.0f, 104.0f, right.getWidth() - 156.0f, 54.0f);
+    auto st = juce::Rectangle<float> (right.getX() + 10.0f, 122.0f, right.getWidth() - 16.0f, 38.0f);
     drawScreen (g, st, 4.0f, true);
     g.setFont (mono (8.0f));
     const auto status = prj.getStatus();
     g.setColour (prj.getPhase() == ProjectSession::Phase::Idle || prj.getPhase() == ProjectSession::Phase::Ready ? mist : cyan);
-    g.drawFittedText (status, st.reduced (8.0f, 4.0f).toNearestInt(), juce::Justification::centredLeft, 3, 0.9f);
+    g.drawFittedText (status, st.reduced (8.0f, 3.0f).toNearestInt(), juce::Justification::centredLeft, 2, 0.9f);
 }
