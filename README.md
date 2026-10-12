@@ -2,9 +2,10 @@
 
 Mastering plug-in (VST3 / AU / Standalone, macOS + Windows) built with JUCE 8.
 
-- **AUTO**: listens 12 s of the loudest part, measures the mix (balance, dynamics, stereo, tempo), compares it with the
-  corridor measured on real released masters of the style (`Resources/Profiles`), writes prudent module settings,
-  then verifies the result. Every move has a reason line in the AUTO report; problems that belong to the mix are reported, not "fixed".
+- **AUTO**: listens 30 s, measures the loudest 60 % of it exactly like the reference profiles (`Resources/Profiles`):
+  1/3-octave balance vs the style's median curve (interquartile tolerance), fitted onto the EQ tools; dynamics split
+  between compression, clipper and limiter; width / mono bass; then measures the processed output, corrects what is
+  still off and reports the remaining distance. Every move has a reason line in the AUTO report; problems that belong to the mix are reported, not "fixed".
 - **Styles** (from the user's reference tracks): Tech House / House, Afro / Latin House, Hard Techno / Rave, Drum & Bass,
   UK Garage / Bass, Lo-fi / Chill — or Auto detection (host tempo or own tempo estimate + spectral balance).
 - **Chain**: SPECTRAL (4 dynamic bells) → COMPRESSION (punch + 3-band leveller) → BASSES/AIR → LARGEUR (sides + mono bass)

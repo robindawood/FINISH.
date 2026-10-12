@@ -6,7 +6,7 @@ import json, os
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 ORDER = ["Tech House / House", "Afro / Latin House", "Hard Techno / Rave", "Drum & Bass", "UK Garage / Bass", "Lo-fi / Chill"]
 FEATS = ["lufs_i", "st_drop", "plr", "lra", "tempo", "lowRatio", "subRatio", "lowMidRatio", "presenceRatio", "highRatio",
-         "sideRatio", "lowSideRatio", "correlation", "true_peak"]
+         "sideRatio", "lowSideRatio", "correlation", "true_peak", "plr_drop"]
 profs = {}
 for f in os.listdir(os.path.join(ROOT, "Resources/Profiles")):
     if f.endswith(".json"):

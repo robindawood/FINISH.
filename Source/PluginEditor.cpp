@@ -50,7 +50,7 @@ WhaleEditor::WhaleEditor (WhaleAudioProcessor& p)
     content.addChildComponent (browser);
 
     autoButton.onClick = [this] { proc.toggleAuto(); };
-    autoButton.setTooltip (fr ("Lance la lecture sur la partie la plus forte, puis clique : WHALE écoute 12 s, règle tout, puis vérifie. Re-clique pour annuler."));
+    autoButton.setTooltip (fr ("Lance la lecture (idéalement depuis le début du drop), puis clique : WHALE écoute 30 s, règle la chaîne, puis mesure le son traité et corrige ce qui reste. Re-clique pour annuler."));
     expertLink.onClick = [this] { openExpert (expert.isVisible() ? -1 : 0); };
     menuLink.onClick = [this] { showMenu(); };
     chain.onOpenModule = [this] (int m) { openExpert (m); };

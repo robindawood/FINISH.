@@ -25,6 +25,7 @@ public:
         float driveDb = 0;            // gain into the clipper/limiter
         bool autoLoudness = false;    // closed loop: loud passages pulled onto targetLufs
         float targetLufs = -9.0f;
+        float loudInputLufs = -100.0f; // input short-term level of the loud passages: the loop only learns there
         float ceilingDb = -1.0f;
     };
 

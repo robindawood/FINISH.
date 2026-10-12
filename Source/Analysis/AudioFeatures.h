@@ -20,4 +20,12 @@ struct AudioFeatures
     float presenceRatio = 0;      // mid 2-5 kHz / mid energy above 150 Hz
     float clipsPerMinute = 0;     // samples at full scale in the input, per minute
     float monoLossDb = 0;         // level lost when summed to mono (3 dB = uncorrelated, > 4.5 = phase problems)
+
+    // AUTO: spectral measurement identical to the reference profiles (SpectralCapture). When hasSpectrum is set, the
+    // ratios above come from it, plr = true peak - integrated loudness (like the profiles).
+    bool hasSpectrum = false;
+    float thirdOctDb[29] {};      // 1/3-octave band power / total mid power (dB), loud frames only
+    float truePeakDb = -100;
+    float loudSeconds = 0;        // seconds of loud material the spectrum was built from
+    float loudLufs = -70;         // loud passages: median of the 3 s short-term values above their median (like the profiles' st_drop)
 };

@@ -123,7 +123,7 @@ inline juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout
     layout.add (std::make_unique<AudioParameterFloat> (ParameterID { PID::ceiling, PID::version }, "Ceiling",
                     NormalisableRange<float> (-3.0f, -0.1f, 0.1f), -1.0f,
                     AudioParameterFloatAttributes().withLabel ("dBTP").withStringFromValueFunction ([] (float v, int) { return String (v, 1) + " dBTP"; })));
-    unit01 (PID::dosage, "Dosage", 0.7f);
+    unit01 (PID::dosage, "Dosage", 1.0f);   // 100 % = the correction AUTO / the preset recommends
     dbParam (PID::manualDrive, "Manual Drive", -6.0f, 24.0f, 0.0f);
     onOff (PID::bypass, "Bypass (A/B)", false);
     onOff (PID::match, "A/B Level Match", true);

@@ -41,6 +41,8 @@ void WhaleAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     dsp.prepare (sampleRate, samplesPerBlock, getTotalNumOutputChannels());
     inAnalyzer.prepare (sampleRate);
     outAnalyzer.prepare (sampleRate);
+    inCap.prepare (sampleRate);
+    outCap.prepare (sampleRate);
     setLatencySamples (dsp.getLatencySamples());
 }
 
@@ -94,6 +96,9 @@ WhaleDSP::Settings WhaleAudioProcessor::buildSettings() noexcept
     {
         s.autoLoudness = true;
         s.targetLufs = effectiveTarget.load() + 6.0f * m (mLoud);
+        // loud-passage reference: rolling (last 30 s), but never below what AUTO measured on the drop, so a long
+        // breakdown does not become the new reference
+        s.loudInputLufs = std::max (inputLoudPassage.load(), autoInputLoudRef.load());
         s.driveDb = driveFF.load() + 6.0f * m (mLoud);
     }
     return s;
@@ -112,9 +117,17 @@ void WhaleAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::
 
     const int nc = buffer.getNumChannels();
     if (nc == 0) return;
-    inAnalyzer.process (buffer.getReadPointer (0), nc > 1 ? buffer.getReadPointer (1) : nullptr, buffer.getNumSamples());
+    const int ns = buffer.getNumSamples();
+    inAnalyzer.process (buffer.getReadPointer (0), nc > 1 ? buffer.getReadPointer (1) : nullptr, ns);
+    // AUTO captures: only blocks with sound (a stopped transport must not dilute the measurement)
+    const bool sound = buffer.getMagnitude (0, ns) > 1.0e-3f;   // -60 dBFS
+    capInput.store (sound);
+    if (sound) inCap.push (buffer.getReadPointer (0), nc > 1 ? buffer.getReadPointer (1) : nullptr, ns);
+    else       inCap.markGap();
     dsp.process (buffer, buildSettings());
-    outAnalyzer.process (buffer.getReadPointer (0), nc > 1 ? buffer.getReadPointer (1) : nullptr, buffer.getNumSamples());
+    outAnalyzer.process (buffer.getReadPointer (0), nc > 1 ? buffer.getReadPointer (1) : nullptr, ns);
+    if (sound) outCap.push (buffer.getReadPointer (0), nc > 1 ? buffer.getReadPointer (1) : nullptr, ns);
+    else       outCap.markGap();
 }
 
 // ------------------------------------------------------------------------------------------------- AUTO
@@ -149,17 +162,21 @@ void WhaleAudioProcessor::toggleAuto()
 {
     if (autoState == AutoState::listening)
     {
+        inCap.stop();
         autoState = AutoState::idle;
         return;
     }
     if (autoState == AutoState::verifying)
     {
+        inCap.stop(); outCap.stop();
         writeBase (beforeAuto);   // cancel: back to the settings before AUTO
         autoState = AutoState::idle;
         return;
     }
     autoSession.clear();
     envLow.clear(); envHigh.clear();
+    outCap.stop();
+    inCap.start();
     autoState = AutoState::listening;
     waitingForAudio = true;
     souffleArmed = false;
@@ -169,8 +186,8 @@ float WhaleAudioProcessor::getAutoProgress() const
 {
     switch (autoState)
     {
-        case AutoState::listening: return (float) juce::jlimit (0.0, 1.0, autoSession.getDuration() / listenSeconds) * 0.75f;
-        case AutoState::verifying: return 0.75f + 0.25f * (float) juce::jlimit (0.0, 1.0, verifySeconds / verifyDuration);
+        case AutoState::listening: return (float) juce::jlimit (0.0, 1.0, inCap.capturedSeconds() / listenSeconds) * 0.55f;
+        case AutoState::verifying: return 0.55f + 0.45f * (float) juce::jlimit (0.0, 1.0, verifySeconds / verifyDuration);
         case AutoState::done:      return 1.0f;
         case AutoState::idle:      break;
     }
@@ -185,6 +202,7 @@ void WhaleAudioProcessor::applyPreset (int index)
     presets.setCurrent (index);
     autoState = AutoState::idle;
     haveAutoTarget = false;
+    autoInputLoudRef.store (-100.0f);
 }
 
 void WhaleAudioProcessor::resetToNeutral()
@@ -192,6 +210,7 @@ void WhaleAudioProcessor::resetToNeutral()
     writeBase (ModuleBase());
     autoState = AutoState::idle;
     haveAutoTarget = false;
+    autoInputLoudRef.store (-100.0f);
     presets.setCurrent (-1);
 }
 
@@ -232,7 +251,11 @@ void WhaleAudioProcessor::timerCallback()
             }
         while ((got = outAnalyzer.readFrames (buf, 64)) > 0)
             for (int i = 0; i < got; ++i)
-                if (buf[i].lufs() > AnalysisSession::silenceLufs) recentOut.push_back (buf[i]);
+                if (buf[i].lufs() > AnalysisSession::silenceLufs)
+                {
+                    recentOut.push_back (buf[i]);
+                    if (autoState == AutoState::verifying && verifyPhase >= 1 && verifyGateOpen) verifyOutFrames.push_back (buf[i]);
+                }
         float lo[512], hi[512];
         while ((got = inAnalyzer.readEnvelopes (lo, hi, 512)) > 0)
             if (autoState == AutoState::listening && dsp.getInputLoudness() > -50.0f && envLow.size() < 20000)
@@ -249,7 +272,7 @@ void WhaleAudioProcessor::timerCallback()
     {
         auto st = AnalysisSession::shortTermLoudness (recentIn);
         std::sort (st.begin(), st.end());
-        inputLoudPassage = st[(size_t) (0.9 * (double) (st.size() - 1))];
+        inputLoudPassage.store (st[(size_t) (0.9 * (double) (st.size() - 1))]);
     }
     if (! recentOut.empty())
     {
@@ -271,9 +294,9 @@ void WhaleAudioProcessor::timerCallback()
             target = loudnessTargets[t].lufs + 1.0f;
         effectiveTarget.store (target);
         // Feed-forward drive: what the input needs to reach the target; the DSP's closed loop trims the rest.
-        if (inputLoudPassage > -50.0f)
+        if (inputLoudPassage.load() > -50.0f)
         {
-            const float want = juce::jlimit (-6.0f, 24.0f, target - inputLoudPassage);
+            const float want = juce::jlimit (-6.0f, 24.0f, target - inputLoudPassage.load());
             driveFF.store (driveFF.load() + 0.05f * (want - driveFF.load()));
         }
     }
@@ -281,60 +304,57 @@ void WhaleAudioProcessor::timerCallback()
     // AUTO state machine
     if (autoState == AutoState::listening)
     {
-        waitingForAudio = dsp.getInputLoudness() < -50.0f;
-        if (autoSession.getDuration() >= listenSeconds)
-        {
-            const auto features = autoSession.computeFeatures();
-            double bpm = hostBpm.load();
-            if (bpm <= 0) bpm = AutoMaster::estimateTempo (envLow, envHigh, AudioAnalyzer::envelopeRate);
-            autoResult = AutoMaster::compute (features, (int) pStyle->load(), bpm, (int) pTarget->load(), pCeil->load());
-            if (autoResult.valid)
-            {
-                beforeAuto = readBase();
-                writeBase (autoResult.base);
-                autoLoudTarget = autoResult.loudPassageTarget;
-                haveAutoTarget = true;
-                for (auto* id : { PID::mGlue, PID::mPunch, PID::mWarmth, PID::mAir, PID::mWidth, PID::mBass, PID::mDetail, PID::mLoud })
-                    if (auto* prm = state.getParameter (id)) prm->setValueNotifyingHost (0.5f);
-                autoState = AutoState::verifying;
-                verifySeconds = 0.0; grAcc = 0.0; grCount = 0;
-                presets.setCurrent (-1);
-            }
-            else autoState = AutoState::idle;
-        }
+        inCap.pull();
+        waitingForAudio = ! capInput.load();
+        if (inCap.capturedSeconds() >= listenSeconds)
+            finishListening();
     }
     else if (autoState == AutoState::verifying)
     {
-        if (dsp.getInputLoudness() > -50.0f)
+        inCap.pull();
+        outCap.pull();
+        verifyPhaseWall += dt;
+        // Only the passages comparable to what AUTO listened to (the loud ones) are measured. If the song never gets
+        // back there (user plays a quiet part), the gate opens after a while so AUTO always finishes.
+        const bool sound = capInput.load();
+        const bool loudEnough = dsp.getInputLoudness() >= autoInputLoud - 6.0f || verifyPhaseWall > 60.0;
+        const bool gate = sound && (verifyPhase == 0 || loudEnough);
+        if (verifyPhase >= 1 && gate != verifyGateOpen)
+        {
+            if (gate) { inCap.resume(); outCap.resume(); }
+            else      { inCap.stop();   outCap.stop(); }
+        }
+        verifyGateOpen = gate;
+        if (gate)
         {
             verifySeconds += dt;
-            grAcc += dsp.getGainReductionDb(); ++grCount;
+            if (verifyPhase >= 1) { grAcc += dsp.getGainReductionDb(); ++grCount; }
         }
-        if (verifySeconds >= verifyDuration)
+        if (verifyPhase == 0 && verifySeconds >= settleSeconds)
         {
-            // Verification: the limiter should not be doing all the work (punch).
+            verifyPhase = 1;
+            grAcc = 0; grCount = 0;
+            startVerifyCapture();
+        }
+        else if (verifyPhase == 1 && outCap.capturedSeconds() >= refineSeconds)
+        {
             const float gr = grCount > 0 ? (float) (grAcc / grCount) : 0.0f;
-            if (gr > 5.0f && (int) pTarget->load() == styleTarget)
-            {
-                auto b = readBase();
-                if (b.clipAmt < 0.8f)
-                {
-                    b.clipAmt = std::min (0.8f, b.clipAmt + 0.2f);
-                    writeBase (b);
-                    autoResult.report.add (fr ("Vérification : le limiteur travaillait trop (") + juce::String (gr, 1) + fr (" dB) → clipper ")
-                                           + juce::String (juce::roundToInt (b.clipAmt * 100)) + " %");
-                }
-                if (gr > 8.0f)
-                {
-                    autoLoudTarget -= 1.0f;
-                    autoResult.report.add (fr ("Vérification : cible baissée de 1 dB pour garder le punch (") + juce::String (autoLoudTarget, 1) + " LUFS)");
-                }
-            }
-            else
-                autoResult.report.add (fr ("Vérification après traitement : OK (limiteur ") + juce::String (gr, 1) + " dB en moyenne)");
+            AutoMaster::refine (estimateProcessed(), gr, autoResult);
+            writeBase (autoResult.base);
+            autoLoudTarget = autoResult.loudPassageTarget;
+            verifyPhase = 2;
+            verifySeconds = settleSeconds + refineSeconds;
+            startVerifyCapture();
+        }
+        else if (verifyPhase == 2 && outCap.capturedSeconds() >= finalSeconds)
+        {
+            AutoMaster::finalCheck (estimateProcessed(), autoResult);
+            inCap.stop(); outCap.stop();
             autoState = AutoState::done;
             souffleArmed = true;
         }
+        if (verifyPhase >= 1 && autoState == AutoState::verifying)
+            verifySeconds = std::max (verifySeconds, settleSeconds + (verifyPhase == 1 ? 0.0 : refineSeconds) + outCap.capturedSeconds());
     }
 
     // Verdict for the whale
@@ -360,6 +380,87 @@ void WhaleAudioProcessor::timerCallback()
     }
 }
 
+AudioFeatures WhaleAudioProcessor::makeFeatures (const std::vector<AnalysisFrame>& frames, const SpectralCapture::Result& spec)
+{
+    auto f = AnalysisSession::computeFeatures (frames);
+    if (! spec.valid) return f;
+    f.valid = true;
+    f.hasSpectrum = true;
+    f.lowRatio = spec.lowRatio; f.subRatio = spec.subRatio; f.lowMidRatio = spec.lowMidRatio; f.presenceRatio = spec.presenceRatio;
+    f.highRatio = spec.highRatio; f.sideRatio = spec.sideRatio; f.lowSideRatio = spec.lowSideRatio;
+    for (int b = 0; b < SpectralCapture::numThirds; ++b) f.thirdOctDb[b] = spec.thirdOctDb[b];
+    f.truePeakDb = spec.truePeakDb;
+    f.loudSeconds = (float) spec.loudSeconds;
+    f.durationSec = (float) spec.seconds;
+    f.plr = spec.truePeakDb - f.integratedLufs;    // like the profiles: true peak - integrated loudness
+    // Loudness of the loud passages, like the profiles' st_drop: median of the 3 s short-term values above their median.
+    auto st = AnalysisSession::shortTermLoudness (frames);
+    st.erase (std::remove_if (st.begin(), st.end(), [] (float v) { return v <= AnalysisSession::silenceLufs; }), st.end());
+    if (! st.empty())
+    {
+        std::sort (st.begin(), st.end());
+        const float med = st[st.size() / 2];
+        std::vector<float> above;
+        for (auto v : st) if (v >= med) above.push_back (v);
+        f.loudLufs = above[above.size() / 2];
+    }
+    return f;
+}
+
+void WhaleAudioProcessor::startVerifyCapture()
+{
+    verifyOutFrames.clear();
+    verifyPhaseWall = 0.0;
+    inCap.start();
+    outCap.start();
+    if (! verifyGateOpen) { inCap.stop(); outCap.stop(); }
+}
+
+AudioFeatures WhaleAudioProcessor::estimateProcessed() const
+{
+    const auto in = inCap.result(), out = outCap.result();
+    auto est = makeFeatures (verifyOutFrames, out);
+    if (! (in.valid && out.valid && listenedFeatures.hasSpectrum)) return est;
+    // transfer of the chain measured on identical passages, applied to the listened spectrum
+    for (int b = 0; b < SpectralCapture::numThirds; ++b)
+        est.thirdOctDb[b] = in.thirdOctDb[b] > -55.0f ? listenedFeatures.thirdOctDb[b] + (out.thirdOctDb[b] - in.thirdOctDb[b])
+                                                      : listenedFeatures.thirdOctDb[b];
+    auto ratio = [] (float listened, float i, float o) { return i > 1.0e-6f ? juce::jlimit (0.0f, 1.0f, listened * o / i) : listened; };
+    est.lowRatio = ratio (listenedFeatures.lowRatio, in.lowRatio, out.lowRatio);
+    est.subRatio = ratio (listenedFeatures.subRatio, in.subRatio, out.subRatio);
+    est.lowMidRatio = ratio (listenedFeatures.lowMidRatio, in.lowMidRatio, out.lowMidRatio);
+    est.presenceRatio = ratio (listenedFeatures.presenceRatio, in.presenceRatio, out.presenceRatio);
+    est.highRatio = ratio (listenedFeatures.highRatio, in.highRatio, out.highRatio);
+    est.sideRatio = ratio (listenedFeatures.sideRatio, in.sideRatio, out.sideRatio);
+    est.lowSideRatio = ratio (listenedFeatures.lowSideRatio, in.lowSideRatio, out.lowSideRatio);
+    return est;
+}
+
+void WhaleAudioProcessor::finishListening()
+{
+    inCap.pull();
+    inCap.stop();
+    const auto features = makeFeatures (autoSession.getFrames(), inCap.result());
+    listenedFeatures = features;
+    autoInputLoud = features.loudLufs > -60.0f ? features.loudLufs : features.integratedLufs;
+    autoInputLoudRef.store (autoInputLoud - 1.0f);
+    double bpm = hostBpm.load();
+    if (bpm <= 0) bpm = AutoMaster::estimateTempo (envLow, envHigh, AudioAnalyzer::envelopeRate);
+    autoResult = AutoMaster::compute (features, (int) pStyle->load(), bpm, (int) pTarget->load(), pCeil->load());
+    if (! autoResult.valid) { autoState = AutoState::idle; return; }
+    beforeAuto = readBase();
+    writeBase (autoResult.base);
+    autoLoudTarget = autoResult.loudPassageTarget;
+    haveAutoTarget = true;
+    for (auto* id : { PID::mGlue, PID::mPunch, PID::mWarmth, PID::mAir, PID::mWidth, PID::mBass, PID::mDetail, PID::mLoud })
+        if (auto* prm = state.getParameter (id)) prm->setValueNotifyingHost (0.5f);
+    autoState = AutoState::verifying;
+    verifyPhase = 0;
+    verifySeconds = 0.0; grAcc = 0.0; grCount = 0;
+    verifyGateOpen = false; verifyPhaseWall = 0.0;
+    presets.setCurrent (-1);
+}
+
 // ------------------------------------------------------------------------------------------------- state
 
 void WhaleAudioProcessor::getStateInformation (juce::MemoryBlock& dest)
@@ -368,6 +469,7 @@ void WhaleAudioProcessor::getStateInformation (juce::MemoryBlock& dest)
     st.setProperty ("whaleVersion", WHALE_VERSION_STRING, nullptr);
     st.setProperty ("autoDone", autoState == AutoState::done, nullptr);
     st.setProperty ("autoTarget", haveAutoTarget ? autoLoudTarget : 0.0f, nullptr);
+    st.setProperty ("autoInLoud", autoInputLoudRef.load(), nullptr);
     st.setProperty ("autoStyle", autoResult.valid ? autoResult.style : 0, nullptr);
     st.setProperty ("autoReport", autoResult.report.joinIntoString ("\n"), nullptr);
     st.setProperty ("autoNotes", autoResult.mixNotes.joinIntoString ("\n"), nullptr);
@@ -385,6 +487,7 @@ void WhaleAudioProcessor::setStateInformation (const void* data, int size)
     const float t = (float) st.getProperty ("autoTarget", 0.0f);
     haveAutoTarget = t < -0.5f;
     if (haveAutoTarget) autoLoudTarget = t;
+    autoInputLoudRef.store (haveAutoTarget ? (float) st.getProperty ("autoInLoud", -100.0f) : -100.0f);
     const int s = (int) st.getProperty ("autoStyle", 0);
     if (s > 0)
     {

@@ -72,6 +72,7 @@ set(WHALE_SOURCES
     Source/Analysis/AudioAnalyzer.cpp
     Source/Analysis/AnalysisSession.cpp
     Source/Auto/AutoMaster.cpp
+    Source/Auto/SpectralCapture.cpp
     Source/Presets/Presets.cpp
     Source/UI/WhaleScene.cpp
     Source/UI/Widgets.cpp

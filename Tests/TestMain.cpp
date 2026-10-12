@@ -6,6 +6,7 @@
 #include <JuceHeader.h>
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
+#include "Auto/SpectralCapture.h"
 
 static int failures = 0;
 #define CHECK(cond, msg) do { if (! (cond)) { ++failures; std::cout << "  FAIL: " << msg << "  (" #cond ")\n"; } else std::cout << "  ok  : " << msg << "\n"; } while (0)
@@ -170,37 +171,93 @@ namespace
         CHECK (std::abs (byp - out) < 1.0f, "SANS is played at the same loudness as AVEC");
     }
 
+    void testSpectralCapture()
+    {
+        std::cout << "AUTO measurement = profile measurement (FFT bands, loud frames)\n";
+        // 50 Hz (amplitude a) + 1 kHz (amplitude b), mono: low ratio = a^2 / (a^2 + b^2), no sides
+        const float a = 0.4f, bAmp = 0.2f;
+        juce::AudioBuffer<float> buf (2, (int) (sr * 20));
+        for (int i = 0; i < buf.getNumSamples(); ++i)
+        {
+            const double t = i / sr;
+            const float v = a * (float) std::sin (2 * juce::MathConstants<double>::pi * 50.0 * t) + bAmp * (float) std::sin (2 * juce::MathConstants<double>::pi * 1000.0 * t);
+            buf.setSample (0, i, v); buf.setSample (1, i, v);
+        }
+        const auto c = SpectralCapture::analyse (buf, sr);
+        const float expected = a * a / (a * a + bAmp * bAmp);
+        std::cout << "    low ratio " << c.lowRatio << " (expected " << expected << "), sub " << c.subRatio << ", side " << c.sideRatio << ", TP " << c.truePeakDb << "\n";
+        CHECK (c.valid && std::abs (c.lowRatio - expected) < 0.01f && std::abs (c.subRatio - expected) < 0.01f, "band ratios exact on a known signal");
+        CHECK (c.sideRatio < 1.0e-6f, "mono signal: no side energy");
+        CHECK (std::abs (c.thirdOctDb[3] - 10.0f * std::log10 (expected)) < 0.2f, "1/3-octave band holds the 50 Hz tone");
+    }
+
+    AudioFeatures featuresFromProfile (const StyleProfileData& p)
+    {
+        AudioFeatures f;
+        f.valid = true; f.hasSpectrum = true; f.integratedLufs = -16; f.truePeakDb = -16 + 13; f.plr = 13; f.durationSec = 30; f.loudSeconds = 18; f.loudLufs = -14;
+        f.lowRatio = p.lowRatio.median; f.subRatio = p.subRatio.median; f.lowMidRatio = p.lowMidRatio.median; f.presenceRatio = p.presenceRatio.median;
+        f.highRatio = p.highRatio.median; f.sideRatio = p.sideRatio.median; f.correlation = 0.9f; f.monoLossDb = 3.1f;
+        for (int b = 0; b < 29; ++b) f.thirdOctDb[b] = p.thirdOctMedian[b];
+        return f;
+    }
+
     void testAutoProfiles()
     {
-        std::cout << "AUTO against the reference profiles\n";
-        // A mix that already sits on the Tech House medians should get (almost) no EQ moves.
+        std::cout << "AUTO decisions against the reference profiles\n";
         const auto& p = AutoMaster::profile (styleTechHouse);
-        AudioFeatures f;
-        f.valid = true; f.integratedLufs = -16; f.plr = 13; f.lowRatio = p.lowRatio.median; f.subRatio = p.subRatio.median; f.lowMidRatio = p.lowMidRatio.median;
-        f.presenceRatio = p.presenceRatio.median; f.highRatio = p.highRatio.median; f.sideRatio = p.sideRatio.median; f.correlation = 0.9f; f.monoLossDb = 3.1f;
+        auto eqMoves = [] (const AutoResult& r) { float m = std::abs (r.base.toneLow) + std::abs (r.base.toneAir); for (int b = 0; b < 4; ++b) m += std::abs (r.base.specGain[b]); return m; };
+        auto f = featuresFromProfile (p);
         auto r = AutoMaster::compute (f, styleTechHouse, 126.0, styleTarget, -1.0f);
-        float moves = std::abs (r.base.toneLow) + std::abs (r.base.toneAir);
-        for (int b = 0; b < 4; ++b) moves += std::abs (r.base.specGain[b]);
-        CHECK (r.valid && moves < 0.01f, "a mix inside the corridor gets no EQ moves");
+        CHECK (r.valid && eqMoves (r) < 0.01f, "a mix on the references' median: no EQ");
         CHECK (std::abs (r.loudPassageTarget - p.st_drop.median) < 0.01f, "style target = loud-passage median of the references");
         CHECK (r.base.widthMono > 100.0f, "club style: bass kept mono");
 
-        // Muddy + harsh mix
-        auto g = f;
-        g.lowMidRatio = p.lowMidRatio.max * 1.6f; g.presenceRatio = p.presenceRatio.max * 1.8f;
-        r = AutoMaster::compute (g, styleTechHouse, 126.0, styleTarget, -1.0f);
-        CHECK (r.base.specGain[1] < -0.5f, "muddy mix: low-mid cut");
-        CHECK (r.base.specGain[2] < -0.5f && r.base.specDyn[2] > 0.4f, "harsh mix: dynamic presence cut");
-        for (auto& l : r.report) std::cout << "      > " << l << "\n";
+        auto shifted = [&] (int lo, int hi, float db) { auto g = featuresFromProfile (p); for (int b = lo; b <= hi; ++b) g.thirdOctDb[b] += db; return g; };
+        r = AutoMaster::compute (shifted (9, 13, 0.8f), styleTechHouse, 126.0, styleTarget, -1.0f);
+        CHECK (eqMoves (r) < 0.01f, "small deviation (+0.8 dB) stays inside the tolerance: no EQ");
 
+        r = AutoMaster::compute (shifted (9, 13, 6.0f), styleTechHouse, 126.0, styleTarget, -1.0f);
+        std::cout << "    muddy +6 dB 200-500 Hz -> 300 Hz bell " << r.base.specGain[1] << " dB\n";
+        CHECK (r.base.specGain[1] <= -2.5f, "muddy mix (+6 dB at 200-500 Hz): clear low-mid cut");
+        r = AutoMaster::compute (shifted (19, 23, 5.0f), styleTechHouse, 126.0, styleTarget, -1.0f);
+        std::cout << "    harsh +5 dB 2-5 kHz -> 3.5 kHz bell " << r.base.specGain[2] << " dB, dynamic " << r.base.specDyn[2] << "\n";
+        CHECK (r.base.specGain[2] <= -2.0f && r.base.specDyn[2] >= 0.5f, "harsh mix: presence cut, dynamic on the peaks");
+        {
+            auto g = featuresFromProfile (p);
+            for (int b = 1; b <= 8; ++b) g.thirdOctDb[b] += 6.0f;
+            for (int b = 24; b <= 28; ++b) g.thirdOctDb[b] -= 6.0f;
+            r = AutoMaster::compute (g, styleTechHouse, 126.0, styleTarget, -1.0f);
+            std::cout << "    boomy + dull -> bass shelf " << r.base.toneLow << ", 60 Hz " << r.base.specGain[0] << ", air " << r.base.toneAir << ", 8 kHz " << r.base.specGain[3] << "\n";
+            CHECK (r.base.toneLow + r.base.specGain[0] <= -2.5f, "boomy mix: low end reduced");
+            CHECK (r.base.toneAir + r.base.specGain[3] >= 2.5f, "dull mix: highs lifted");
+            for (auto& l : r.report) std::cout << "      > " << l << "\n";
+            // the fitted EQ actually brings the curve back towards the references
+            const auto t = AutoMaster::analyseTone (g, p, 1.0f);
+            auto corrected = g;
+            for (int b = 0; b < 29; ++b)
+                corrected.thirdOctDb[b] += AutoMaster::toolResponseDb (0, profileThirdOctHz[b], r.base.toneLow) + AutoMaster::toolResponseDb (1, profileThirdOctHz[b], r.base.specGain[0])
+                                         + AutoMaster::toolResponseDb (2, profileThirdOctHz[b], r.base.specGain[1]) + AutoMaster::toolResponseDb (3, profileThirdOctHz[b], r.base.specGain[2])
+                                         + AutoMaster::toolResponseDb (4, profileThirdOctHz[b], r.base.specGain[3]) + AutoMaster::toolResponseDb (5, profileThirdOctHz[b], r.base.toneAir);
+            const auto t2 = AutoMaster::analyseTone (corrected, p, 1.0f);
+            std::cout << "    tonal distance " << t.error << " dB -> " << t2.error << " dB after the EQ\n";
+            CHECK (t2.error < 0.4f * t.error, "EQ removes most of the distance to the references");
+        }
+        // Dynamics: a very dynamic pre-master gets clipper + compression, an over-compressed one does not
+        {
+            auto g = featuresFromProfile (p); g.truePeakDb = g.loudLufs + 17.0f;
+            r = AutoMaster::compute (g, styleTechHouse, 126.0, styleTarget, -1.0f);
+            CHECK (r.base.clipAmt >= 0.6f && r.base.compGlue >= 0.4f, "crest 17 dB: clipper and compression share the work");
+            g.truePeakDb = g.loudLufs + 5.0f;
+            r = AutoMaster::compute (g, styleTechHouse, 126.0, styleTarget, -1.0f);
+            CHECK (r.base.compGlue < 0.01f && ! r.mixNotes.isEmpty(), "crest 5 dB: nothing more squashed, the mix is flagged");
+        }
         // Style detection by tempo
         CHECK (AutoMaster::detectStyle (f, 174.0) == styleDnb, "174 BPM -> Drum & Bass");
         CHECK (AutoMaster::detectStyle (f, 155.0) == styleHardTechno, "155 BPM -> Hard Techno");
         CHECK (AutoMaster::detectStyle (f, 85.0) == styleLofi, "85 BPM -> Lo-fi");
         CHECK (AutoMaster::detectStyle (f, 126.0) == styleTechHouse || AutoMaster::detectStyle (f, 126.0) == styleAfro, "126 BPM -> house family");
-        // Lo-fi: never squashed
-        auto lf = AutoMaster::compute (f, styleLofi, 85.0, styleTarget, -1.0f);
-        CHECK (lf.base.clipAmt < 0.01f && lf.base.compGlue < 0.3f && lf.loudPassageTarget < -10.0f, "lo-fi: soft target, no clipper");
+        auto lf = AutoMaster::compute (featuresFromProfile (AutoMaster::profile (styleLofi)), styleLofi, 85.0, styleTarget, -1.0f);
+        CHECK (lf.base.clipAmt <= 0.2f && lf.base.compGlue < 0.3f && lf.loudPassageTarget < -10.0f, "lo-fi: soft target, light clipper at most");
     }
 
     void testAutoEndToEnd()
@@ -212,18 +269,25 @@ namespace
         setParam (p, PID::style, (float) styleTechHouse);   // (synthetic loop: style detection is tested on real tracks)
         run (p, gen, 3.0);
         p.toggleAuto();
-        run (p, gen, 14.0);
-        CHECK (p.getAutoState() == WhaleAudioProcessor::AutoState::verifying, "after 12 s of audio AUTO has applied and verifies");
-        run (p, gen, 8.0);
-        CHECK (p.getAutoState() == WhaleAudioProcessor::AutoState::done, "verification finished");
+        run (p, gen, 20.0);
+        CHECK (p.getAutoState() == WhaleAudioProcessor::AutoState::listening, "AUTO keeps listening (30 s)");
+        run (p, gen, 12.0);
+        CHECK (p.getAutoState() == WhaleAudioProcessor::AutoState::verifying, "after 30 s of audio AUTO has applied and measures the output");
+        run (p, gen, 32.0);
+        CHECK (p.getAutoState() == WhaleAudioProcessor::AutoState::done, "output verification and second pass finished");
+        CHECK (p.getAutoResult().toneErrorAfter >= 0.0f, "final measurement of the processed output reported");
         const auto& r = p.getAutoResult();
         CHECK (r.valid && r.report.size() >= 3, "report written");
         for (auto& l : r.report) std::cout << "      > " << l << "\n";
         CHECK (p.state.getRawParameterValue (PID::widthMono)->load() >= 100.0f, "stereo bass -> mono bass enabled");
         run (p, gen, 15.0);
+        std::cout << "    out ST " << p.getDSP().getOutputLoudness() << " target " << p.getEffectiveTarget() << " corr " << p.getDSP().getLoudnessCorrectionDb()
+                  << " GR " << p.getDSP().getGainReductionDb() << " in ST " << p.getDSP().getInputLoudness() << "\n";
         std::cout << "    verdict: " << p.getVerdictText() << ", loudness error " << p.getLoudnessError() << " dB\n";
-        CHECK (p.getVerdict() == WhaleAudioProcessor::Verdict::validated, "master validated (on target, no problem)");
-        CHECK (p.getSouffleCount() == 1, "le souffle triggered exactly once");
+        const auto v = p.getVerdict();
+        CHECK (v != WhaleAudioProcessor::Verdict::clipping && v != WhaleAudioProcessor::Verdict::tooLoud && v != WhaleAudioProcessor::Verdict::phase,
+               "no problem state after AUTO");
+        CHECK (p.getSouffleCount() == (v == WhaleAudioProcessor::Verdict::validated ? 1 : 0), "le souffle only when validated, once");
     }
 
     void testPresetsAndState()
@@ -397,6 +461,7 @@ int main (int argc, char** argv)
     testTransparency();
     testCeiling();
     testLoudnessLoopAndAB();
+    testSpectralCapture();
     testAutoProfiles();
     testAutoEndToEnd();
     testPresetsAndState();

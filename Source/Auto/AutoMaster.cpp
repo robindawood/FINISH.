@@ -1,4 +1,6 @@
 #include "AutoMaster.h"
+#include "../DSP/Biquad.h"
+#include <complex>
 
 namespace
 {
@@ -6,32 +8,11 @@ namespace
     juce::String dbs (float v) { return (v > 0 ? "+" : "") + juce::String (v, 1) + " dB"; }
     juce::String pct (float v) { return juce::String (juce::roundToInt (v * 100.0f)) + " %"; }
 
-    struct Corridor { float lo, hi; };
-    Corridor corridor (const ProfileStat& s, int numTracks)
-    {
-        const float iqr = s.p75 - s.p25;
-        float lo = std::min (s.p25 - 0.5f * iqr, s.min), hi = std::max (s.p75 + 0.5f * iqr, s.max);
-        if (numTracks < 5)   // provisional profile: be even more tolerant
-        {
-            lo = std::min (lo, s.median * 0.8f);
-            hi = std::max (hi, s.median * 1.25f);
-        }
-        return { std::max (lo, 1.0e-5f), std::max (hi, 2.0e-5f) };
-    }
 }
 
 const StyleProfileData& AutoMaster::profile (int style) noexcept
 {
     return styleProfileData[juce::jlimit (0, 5, style - 1)];
-}
-
-float AutoMaster::corridorDistanceDb (float value, const ProfileStat& s) noexcept
-{
-    const auto c = corridor (s, 10);
-    if (value <= 0.0f) return -20.0f;
-    if (value < c.lo) return 10.0f * std::log10 (value / c.lo);
-    if (value > c.hi) return 10.0f * std::log10 (value / c.hi);
-    return 0.0f;
 }
 
 double AutoMaster::estimateTempo (const std::vector<float>& low, const std::vector<float>& high, double rate)
@@ -95,6 +76,214 @@ int AutoMaster::detectStyle (const AudioFeatures& f, double bpm)
     return dist (styleAfro) < dist (styleTechHouse) ? styleAfro : styleTechHouse;
 }
 
+
+// ============================================================================================ tone
+
+namespace
+{
+    constexpr int nb = 29;
+    constexpr int anchorLo = 9, anchorHi = 23;    // 200 Hz .. 5 kHz: reference level for both curves
+    // "trop de ..." / "manque de ..." (with elision for the vowels)
+    const char* regionNames[] = { "de sub (30-60 Hz)", "de basses (80-160 Hz)", "de bas-m\xc3\xa9""dium (200-500 Hz)", "de m\xc3\xa9""dium (630 Hz-1,6 kHz)",
+                                  "de pr\xc3\xa9sence (2-5 kHz)", "d'aigus (6-10 kHz)", "d'air (12-16 kHz)" };
+    constexpr int regionLo[] = { 1, 5, 9, 14, 19, 24, 27 }, regionHi[] = { 4, 8, 13, 18, 23, 26, 28 };
+
+    // clear excess under 40 Hz, in bands where there is real energy
+    bool hasSubExcess (const AutoMaster::ToneAnalysis& t)
+    {
+        for (int b = 0; b <= 2; ++b)
+            if (t.wanted[b] < -1.0f && t.weight[b] > 0.1f) return true;
+        return false;
+    }
+
+    struct Limits { float lo, hi; };
+    Limits toolLimits (int tool, bool lofi)
+    {
+        switch (tool)
+        {
+            case 0: return { -4.5f, 4.0f };                    // bass shelf
+            case 1: return { -5.0f, 3.0f };                    // 60 Hz bell
+            case 2: return { -5.0f, 2.5f };                    // 300 Hz bell
+            case 3: return { -5.0f, 3.0f };                    // 3.5 kHz bell
+            case 4: return { -5.0f, lofi ? 1.0f : 3.0f };      // 8 kHz bell
+            default: return { -4.0f, lofi ? 1.5f : 3.5f };     // air shelf
+        }
+    }
+    float getTool (const ModuleBase& b, int k)
+    {
+        switch (k) { case 0: return b.toneLow; case 1: return b.specGain[0]; case 2: return b.specGain[1]; case 3: return b.specGain[2]; case 4: return b.specGain[3]; default: return b.toneAir; }
+    }
+    void setTool (ModuleBase& b, int k, float v)
+    {
+        switch (k) { case 0: b.toneLow = v; break; case 1: b.specGain[0] = v; break; case 2: b.specGain[1] = v; break; case 3: b.specGain[2] = v; break; case 4: b.specGain[3] = v; break; default: b.toneAir = v; }
+    }
+    const char* toolName (int k)
+    {
+        switch (k) { case 0: return "basses 110 Hz"; case 1: return "SPECTRAL 60 Hz"; case 2: return "SPECTRAL 300 Hz"; case 3: return "SPECTRAL 3,5 kHz"; case 4: return "SPECTRAL 8 kHz"; default: return "air 10 kHz"; }
+    }
+}
+
+float AutoMaster::toolResponseDb (int tool, float hz, float gainDb)
+{
+    constexpr double sr = 48000.0;
+    Biquad bq;
+    switch (tool)
+    {
+        case 0: bq.setLowShelf (sr, 110.0, gainDb); break;
+        case 1: bq.setPeak (sr, specBands[0].hz, specBands[0].q, gainDb); break;
+        case 2: bq.setPeak (sr, specBands[1].hz, specBands[1].q, gainDb); break;
+        case 3: bq.setPeak (sr, specBands[2].hz, specBands[2].q, gainDb); break;
+        case 4: bq.setPeak (sr, specBands[3].hz, specBands[3].q, gainDb); break;
+        default: bq.setHighShelf (sr, 10000.0, gainDb); break;
+    }
+    const double w = 2.0 * juce::MathConstants<double>::pi * hz / sr;
+    const std::complex<double> z1 = std::polar (1.0, -w), z2 = std::polar (1.0, -2.0 * w);
+    const auto num = (double) bq.b0 + (double) bq.b1 * z1 + (double) bq.b2 * z2;
+    const auto den = 1.0 + (double) bq.a1 * z1 + (double) bq.a2 * z2;
+    return (float) (20.0 * std::log10 (std::abs (num / den)));
+}
+
+AutoMaster::ToneAnalysis AutoMaster::analyseTone (const AudioFeatures& f, const StyleProfileData& p, float strength)
+{
+    ToneAnalysis t;
+    // light smoothing of the mix curve (neighbouring bands), anchor both curves on the 200 Hz - 5 kHz average
+    float mix[nb];
+    for (int b = 0; b < nb; ++b)
+    {
+        const int l = std::max (0, b - 1), r = std::min (nb - 1, b + 1);
+        mix[b] = 0.25f * f.thirdOctDb[l] + 0.5f * f.thirdOctDb[b] + 0.25f * f.thirdOctDb[r];
+    }
+    float am = 0, ap = 0;
+    for (int b = anchorLo; b <= anchorHi; ++b) { am += mix[b]; ap += p.thirdOctMedian[b]; }
+    am /= (float) (anchorHi - anchorLo + 1); ap /= (float) (anchorHi - anchorLo + 1);
+    const bool provisional = p.numTracks < 5;
+    double se = 0, sw = 0;
+    for (int b = 0; b < nb; ++b)
+    {
+        t.deviation[b] = (mix[b] - am) - (p.thirdOctMedian[b] - ap);
+        float tol = 0.5f * (p.thirdOctP75[b] - p.thirdOctP25[b]);
+        tol = juce::jlimit (b < 5 ? 1.5f : 1.0f, 3.0f, tol);          // lowest bands: measurement is coarser
+        if (provisional) tol = std::min (4.0f, tol * 1.4f + 0.5f);
+        t.tolerance[b] = tol;
+        float w = 1.0f;
+        if (b == 0) w = 0.3f; else if (b == 1) w = 0.5f; else if (b <= 3) w = 0.75f; else if (b == 27) w = 0.6f; else if (b == 28) w = 0.25f;
+        if (f.thirdOctDb[b] < -60.0f) w *= 0.1f;                       // nothing there (e.g. no air in a lo-fi track)
+        t.weight[b] = w;
+        const float ad = std::abs (t.deviation[b]);
+        if (ad > tol)
+        {
+            const float ramp = juce::jlimit (0.0f, 1.0f, (ad - tol) / (0.5f * tol));
+            t.wanted[b] = -(t.deviation[b] > 0 ? 1.0f : -1.0f) * (ad - 0.4f * tol) * strength * ramp;
+            se += (double) w * (ad - tol) * (ad - tol);
+        }
+        sw += w;
+    }
+    t.error = (float) std::sqrt (se / std::max (1.0e-9, sw));
+    return t;
+}
+
+std::array<float, 6> AutoMaster::fitTone (const ToneAnalysis& t)
+{
+    return fitToneBounded (t, false, {});
+}
+
+// Bounded least squares (active set): a tool that hits its limit is frozen there and the others are re-solved, so the
+// remaining tools never compensate in the wrong direction. offset = gains already in place (second pass).
+std::array<float, 6> AutoMaster::fitToneBounded (const ToneAnalysis& t, bool lofi, std::array<float, 6> offset)
+{
+    constexpr int K = 6;
+    double A[nb][K];
+    for (int b = 0; b < nb; ++b)
+        for (int k = 0; k < K; ++k)
+            A[b][k] = toolResponseDb (k, profileThirdOctHz[b], 3.0f) / 3.0;
+    // the direction each tool is needed in its own zone: a tool may not move against it
+    double need[K] {};
+    for (int k = 0; k < K; ++k)
+        for (int b = 0; b < nb; ++b) need[k] += t.weight[b] * std::abs (A[b][k]) * t.wanted[b];
+    // Excess under 40 Hz (rumble, sub too deep): the bass tools must not lift it further, whatever 50-100 Hz wants.
+    const bool subExcess = hasSubExcess (t);
+    auto limitsOf = [&] (int k)
+    {
+        auto lim = toolLimits (k, lofi);
+        if (subExcess && k <= 1) lim.hi = std::min (lim.hi, std::max (0.0f, offset[(size_t) k]));
+        return lim;
+    };
+    std::array<float, 6> g {};
+    bool fixed[K] {};
+    for (int iter = 0; iter < 2 * K + 1; ++iter)
+    {
+        // residual target once the frozen tools are accounted for
+        double target[nb];
+        for (int b = 0; b < nb; ++b)
+        {
+            target[b] = t.wanted[b];
+            for (int k = 0; k < K; ++k) if (fixed[k]) target[b] -= A[b][k] * g[(size_t) k];
+        }
+        int idx[K], m = 0;
+        for (int k = 0; k < K; ++k) if (! fixed[k]) idx[m++] = k;
+        if (m == 0) break;
+        double M[K][K + 1] {};
+        for (int i = 0; i < m; ++i)
+        {
+            for (int j = 0; j < m; ++j)
+            {
+                double s = 0;
+                for (int b = 0; b < nb; ++b) s += t.weight[b] * A[b][idx[i]] * A[b][idx[j]];
+                M[i][j] = s + (i == j ? 0.08 : 0.0);   // ridge: no wild opposing moves
+            }
+            double s = 0;
+            for (int b = 0; b < nb; ++b) s += t.weight[b] * A[b][idx[i]] * target[b];
+            M[i][m] = s;
+        }
+        for (int c = 0; c < m; ++c)   // Gauss-Jordan
+        {
+            int piv = c;
+            for (int r = c + 1; r < m; ++r) if (std::abs (M[r][c]) > std::abs (M[piv][c])) piv = r;
+            for (int j = 0; j <= m; ++j) std::swap (M[c][j], M[piv][j]);
+            const double d = M[c][c];
+            if (std::abs (d) < 1.0e-12) continue;
+            for (int j = 0; j <= m; ++j) M[c][j] /= d;
+            for (int r = 0; r < m; ++r)
+                if (r != c)
+                {
+                    const double f = M[r][c];
+                    for (int j = 0; j <= m; ++j) M[r][j] -= f * M[c][j];
+                }
+        }
+        // freeze only the worst offender, then re-solve the others (freezing all at once would lock in values that
+        // were only extreme because of another tool's excess)
+        int worst = -1;
+        float worstExcess = 0.0f;
+        for (int i = 0; i < m; ++i)
+        {
+            const int k = idx[i];
+            g[(size_t) k] = (float) M[i][m];
+            const auto lim = limitsOf (k);
+            const float total = g[(size_t) k] + offset[(size_t) k];
+            const float excess = std::max (lim.lo - total, total - lim.hi);
+            if (excess > worstExcess) { worstExcess = excess; worst = k; }
+            const bool against = (double) g[(size_t) k] * need[k] < 0.0 && std::abs (g[(size_t) k]) > 0.25f;
+            if (against && std::abs (g[(size_t) k]) > worstExcess) { worstExcess = std::abs (g[(size_t) k]); worst = k + 100; }
+        }
+        const bool violated = worst >= 0;
+        if (worst >= 100)       // moving against its own zone's need: freeze at no change
+        {
+            g[(size_t) (worst - 100)] = 0.0f;
+            fixed[worst - 100] = true;
+        }
+        else if (violated)
+        {
+            const auto lim = limitsOf (worst);
+            g[(size_t) worst] = juce::jlimit (lim.lo, lim.hi, g[(size_t) worst] + offset[(size_t) worst]) - offset[(size_t) worst];
+            fixed[worst] = true;
+        }
+        if (! violated) break;
+    }
+    return g;
+}
+
+// ============================================================================================ first pass
+
 AutoResult AutoMaster::compute (const AudioFeatures& f, int styleParam, double bpm, int targetIndex, float ceilingDb)
 {
     AutoResult r;
@@ -105,157 +294,200 @@ AutoResult AutoMaster::compute (const AudioFeatures& f, int styleParam, double b
     const auto& p = profile (r.style);
     const int n = p.numTracks;
     const bool lofi = r.style == styleLofi;
+    const bool hard = r.style == styleDnb || r.style == styleHardTechno;
     auto& b = r.base;
 
     r.report.add (fr ("Style : ") + p.name + (r.styleWasDetected ? fr (" (détecté") + (bpm > 0 ? ", " + juce::String (juce::roundToInt (bpm)) + " BPM)" : juce::String (")")) : juce::String())
-                  + fr (" — comparé à ") + juce::String (n) + fr (" masters de référence") + (n < 5 ? fr (" (profil provisoire)") : juce::String()));
+                  + fr (" — comparé à ") + juce::String (n) + fr (" masters de référence") + (n < 5 ? fr (" (profil provisoire : corrections plus prudentes)") : juce::String()));
+    if (f.hasSpectrum)
+        r.report.add (fr ("Écoute : ") + juce::String (juce::roundToInt (f.durationSec)) + fr (" s, analyse sur les ") + juce::String (juce::roundToInt (f.loudSeconds))
+                      + fr (" s les plus forts (même méthode que les références)"));
 
-    auto dist = [&] (float v, const ProfileStat& s) {
-        const auto c = corridor (s, n);
-        if (v <= 0.0f) return -20.0f;
-        if (v < c.lo) return 10.0f * std::log10 (v / c.lo);
-        if (v > c.hi) return 10.0f * std::log10 (v / c.hi);
-        return 0.0f;
-    };
+    // ---- Tonal balance: curve vs references, fitted on the EQ tools
+    if (f.hasSpectrum)
+    {
+        const auto t = analyseTone (f, p, n < 5 ? 0.7f : 0.9f);
+        r.toneErrorBefore = t.error;
+        for (int g = 0; g < 7; ++g)
+        {
+            float dev = 0, excess = 0, w = 0;
+            for (int i = regionLo[g]; i <= regionHi[g]; ++i)
+            {
+                dev += t.deviation[i] * t.weight[i]; w += t.weight[i];
+                excess = std::max (excess, std::abs (t.deviation[i]) - t.tolerance[i]);
+            }
+            dev /= std::max (1.0e-6f, w);
+            if (excess > 0.3f && std::abs (dev) > 0.75f)
+                r.report.add ((dev > 0 ? fr ("Trop ") : fr ("Manque ")) + fr (regionNames[g]) + " : " + (dev > 0 ? "+" : "") + juce::String (dev, 1)
+                              + fr (" dB par rapport aux références"));
+        }
+        auto g = fitToneBounded (t, lofi, {});
+        juce::String moves;
+        for (int k = 0; k < 6; ++k)
+        {
+            const auto lim = toolLimits (k, lofi);
+            const float v = juce::jlimit (lim.lo, lim.hi, g[(size_t) k]);
+            setTool (b, k, std::abs (v) < 0.2f ? 0.0f : v);
+            if (std::abs (v) >= 0.2f) moves << (moves.isEmpty() ? "" : ", ") << toolName (k) << " " << dbs (v);
+        }
+        if (moves.isNotEmpty()) r.report.add (fr ("Égalisation : ") + moves);
+        else r.report.add (fr ("Équilibre tonal déjà dans les références : pas d'égalisation"));
+        if (hasSubExcess (t))
+            r.mixNotes.add (fr ("Énergie excessive sous 40 Hz (") + dbs (std::max ({ t.deviation[0], t.deviation[1], t.deviation[2] })) + fr (" vs références) : un filtre coupe-bas vers 25-30 Hz sur le bus ou la basse/kick dans le mix rendra le master plus propre et plus fort."));
+        // what mastering EQ cannot reasonably fix: tell where the mix should be reworked
+        for (int gi = 0; gi < 7; ++gi)
+        {
+            float dev = 0, res = 0, w = 0;
+            for (int i = regionLo[gi]; i <= regionHi[gi]; ++i)
+            {
+                float eq = 0;
+                for (int k = 0; k < 6; ++k) eq += toolResponseDb (k, profileThirdOctHz[i], getTool (b, k));
+                dev += t.deviation[i] * t.weight[i]; res += (t.deviation[i] + eq) * t.weight[i]; w += t.weight[i];
+            }
+            dev /= std::max (1.0e-6f, w); res /= std::max (1.0e-6f, w);
+            if (std::abs (res) > 3.0f && gi > 0)
+                r.mixNotes.add ((dev > 0 ? fr ("Trop ") : fr ("Manque ")) + fr (regionNames[gi]) + fr (" dans le mix (") + dbs (dev) + fr (") : le master en corrige ")
+                                + juce::String (std::abs (res - dev), 1) + fr (" dB sans abîmer le son, le reste est à reprendre dans le mix."));
+        }
+        // dynamic bells: the corrected zones also get a level-dependent action (only the peaks are pushed further)
+        b.specDyn[0] = lofi ? 0.0f : (b.specGain[0] < -1.0f ? 0.5f : 0.25f);
+        b.specDyn[1] = b.specGain[1] < -1.0f ? 0.4f : 0.15f;
+        b.specDyn[2] = b.specGain[2] < -1.0f ? 0.6f : 0.3f;
+        b.specDyn[3] = b.specGain[3] < -1.0f ? 0.5f : 0.2f;
+    }
 
-    // ---- Low end (< 150 Hz) -> Bass shelf
-    {
-        const float d = dist (f.lowRatio, p.lowRatio);
-        if (std::abs (d) > 0.3f)
-        {
-            b.toneLow = juce::jlimit (-3.0f, 2.5f, -0.9f * d);
-            r.report.add ((d > 0 ? fr ("Graves en excès : ") : fr ("Graves en retrait : ")) + pct (f.lowRatio) + fr (" de l'énergie sous 150 Hz (références ")
-                          + pct (p.lowRatio.p25) + "-" + pct (p.lowRatio.p75) + fr (") → basses ") + dbs (b.toneLow));
-        }
-    }
-    // ---- Sub (< 60 Hz) -> Spectral SUB (static + dynamic for booming notes)
-    {
-        const float d = dist (f.subRatio, p.subRatio);
-        if (d > 0.3f)
-        {
-            b.specGain[0] = juce::jlimit (-2.5f, 0.0f, -0.8f * d);
-            b.specDyn[0] = 0.5f;
-            r.report.add (fr ("Sub trop présent (") + pct (f.subRatio) + fr (" du mid sous 60 Hz) → SPECTRAL sub ") + dbs (b.specGain[0]) + fr (", dynamique sur les notes qui débordent"));
-        }
-        else if (d < -0.5f && ! lofi)
-        {
-            b.specGain[0] = juce::jlimit (0.0f, 1.5f, -0.5f * d);
-            r.report.add (fr ("Sub léger pour le style → SPECTRAL sub ") + dbs (b.specGain[0]));
-        }
-        else b.specDyn[0] = lofi ? 0.0f : 0.25f;
-    }
-    // ---- Low-mid 200-500 Hz (mud)
-    {
-        const float d = dist (f.lowMidRatio, p.lowMidRatio);
-        if (d > 0.3f)
-        {
-            b.specGain[1] = juce::jlimit (-3.0f, 0.0f, -0.9f * d);
-            b.specDyn[1] = 0.4f;
-            r.report.add (fr ("Bas-médiums chargés (son boueux) : ") + pct (f.lowMidRatio) + fr (" entre 200 et 500 Hz → SPECTRAL ") + dbs (b.specGain[1]) + fr (" à 300 Hz"));
-        }
-        else if (d < -0.5f)
-        {
-            b.specGain[1] = juce::jlimit (0.0f, 1.5f, -0.5f * d);
-            r.report.add (fr ("Manque de corps (bas-médiums) → SPECTRAL ") + dbs (b.specGain[1]) + fr (" à 300 Hz"));
-        }
-    }
-    // ---- Presence 2-5 kHz
-    {
-        const float d = dist (f.presenceRatio, p.presenceRatio);
-        if (d > 0.3f)
-        {
-            b.specGain[2] = juce::jlimit (-3.0f, 0.0f, -0.8f * d);
-            b.specDyn[2] = 0.6f;
-            r.report.add (fr ("Haut-médiums agressifs : ") + pct (f.presenceRatio) + fr (" entre 2 et 5 kHz → SPECTRAL ") + dbs (b.specGain[2]) + fr (" à 3,5 kHz, surtout sur les pics"));
-        }
-        else if (d < -0.4f)
-        {
-            b.specGain[2] = juce::jlimit (0.0f, 2.0f, -0.6f * d);
-            r.report.add (fr ("Manque de présence (2-5 kHz, l'attaque du kick et des voix) → SPECTRAL ") + dbs (b.specGain[2]));
-        }
-        else b.specDyn[2] = 0.3f;   // light de-harsh on peaks only
-    }
-    // ---- Highs (> 4 kHz) -> Air shelf, dynamic 8 kHz if too much
-    {
-        const float d = dist (f.highRatio, p.highRatio);
-        if (d > 0.3f)
-        {
-            b.toneAir = juce::jlimit (-3.0f, 0.0f, -0.8f * d);
-            b.specDyn[3] = 0.4f;
-            r.report.add (fr ("Aigus trop brillants : ") + pct (f.highRatio) + fr (" au-dessus de 4 kHz → air ") + dbs (b.toneAir) + fr (", charlestons adoucis sur les pics"));
-        }
-        else if (d < -0.4f)
-        {
-            b.toneAir = juce::jlimit (0.0f, lofi ? 1.0f : 2.5f, -0.7f * d);
-            r.report.add (fr ("Aigus ternes → air ") + dbs (b.toneAir) + fr (" à 10 kHz"));
-        }
-    }
-    // ---- Width and mono bass
+    // ---- Width and mono bass (side energy, measured like the references)
     {
         const bool phase = f.monoLossDb > 4.5f || f.correlation < 0.2f;
-        const float d = dist (f.sideRatio, p.sideRatio);
+        const float med = std::max (1.0e-4f, p.sideRatio.median);
+        const float d = 10.0f * std::log10 (std::max (f.sideRatio, 1.0e-5f) / med);
+        const float tol = juce::jlimit (1.5f, 4.0f, 2.5f * std::log10 (std::max (p.sideRatio.p75, 1.0e-4f) / std::max (p.sideRatio.p25, 1.0e-5f)) * (n < 5 ? 1.5f : 1.0f));
         if (phase)
         {
-            b.widthSide = -1.5f;
+            b.widthSide = -2.0f;
             r.mixNotes.add (fr ("Problème de phase : le mix perd ") + juce::String (f.monoLossDb, 1) + fr (" dB en mono. À vérifier dans le mix (sons inversés, chorus/élargisseurs trop forts)."));
-            r.report.add (fr ("Phase fragile → côtés -1,5 dB pour protéger le mono"));
+            r.report.add (fr ("Phase fragile → côtés -2 dB pour protéger le mono"));
         }
-        else if (d > 0.5f)
+        else if (std::abs (d) > tol)
         {
-            b.widthSide = juce::jlimit (-3.0f, 0.0f, -0.7f * d);
-            r.report.add (fr ("Image plus large que les références → côtés ") + dbs (b.widthSide));
-        }
-        else if (d < -0.8f)
-        {
-            b.widthSide = juce::jlimit (0.0f, 1.5f, -0.4f * d);
-            r.report.add (fr ("Image étroite pour le style → côtés ") + dbs (b.widthSide));
+            b.widthSide = juce::jlimit (-4.0f, 2.5f, -0.7f * (d - (d > 0 ? 0.5f * tol : -0.5f * tol)));
+            r.report.add ((d > 0 ? fr ("Image plus large") : fr ("Image plus étroite")) + fr (" que les références (côtés ") + (d > 0 ? "+" : "") + juce::String (d, 1)
+                          + fr (" dB) → côtés ") + dbs (b.widthSide));
         }
         if (! lofi)
         {
-            b.widthMono = r.style == styleDnb || r.style == styleHardTechno ? 160.0f : 140.0f;
+            b.widthMono = hard ? 160.0f : 140.0f;
             if (f.lowSideRatio > 0.01f)
-                r.report.add (fr ("Basses en stéréo (") + pct (f.lowSideRatio) + fr (") alors que toutes les références sont mono → graves au centre sous ") + juce::String (juce::roundToInt (b.widthMono)) + " Hz");
+                r.report.add (fr ("Basses en stéréo (") + pct (f.lowSideRatio) + fr (") alors que les références sont mono → graves au centre sous ") + juce::String (juce::roundToInt (b.widthMono)) + " Hz");
             else
-                r.report.add (fr ("Graves gardés au centre sous ") + juce::String (juce::roundToInt (b.widthMono)) + fr (" Hz (comme 100 % des références)"));
+                r.report.add (fr ("Graves gardés au centre sous ") + juce::String (juce::roundToInt (b.widthMono)) + fr (" Hz (comme les références)"));
         }
     }
-    // ---- Dynamics: glue / punch / clipper / saturation
-    {
-        const auto plrC = corridor (p.plr, n);
-        const bool squashed = f.plr < 8.0f;
-        const bool veryDynamic = f.plr > plrC.hi + 2.0f;
-        b.compDetail = lofi ? 0.7f : 0.5f;
-        if (squashed)
-        {
-            b.compGlue = 0.0f; b.compPunch = 0.0f; b.clipAmt = 0.15f;
-            r.mixNotes.add (fr ("Mix déjà très compressé (PLR ") + juce::String (f.plr, 1) + fr (" dB) : plus de limiteur ne le rendra pas plus percutant. Allège la compression du bus dans le mix."));
-            r.report.add (fr ("Mix déjà compressé → pas de compression en plus, clipper léger"));
-        }
-        else
-        {
-            b.compGlue = lofi ? 0.15f : (veryDynamic ? 0.55f : 0.35f);
-            b.compPunch = lofi ? 0.0f : (veryDynamic ? 0.1f : 0.25f);
-            b.clipAmt = lofi ? 0.0f : (r.style == styleDnb || r.style == styleHardTechno ? 0.6f : 0.4f);
-            r.report.add (fr ("Dynamique : PLR ") + juce::String (f.plr, 1) + fr (" dB (références ") + juce::String (p.plr.p25, 1) + "-" + juce::String (p.plr.p75, 1)
-                          + fr (") → compression ") + pct (b.compGlue) + ", punch " + pct (b.compPunch) + ", clipper " + pct (b.clipAmt));
-        }
-        b.satDrive = lofi ? 0.3f : (r.style == styleHardTechno || r.style == styleDnb ? 0.25f : 0.15f);
-    }
+
     // ---- Loudness target (loud passages, like the closed loop measures them)
     r.integratedTarget = p.lufs_i.median;
     if (targetIndex == styleTarget)
-    {
         r.loudPassageTarget = p.st_drop.median;
-        r.report.add (fr ("Volume : passages forts à ") + juce::String (r.loudPassageTarget, 1) + fr (" LUFS (médiane des références, ") + juce::String (p.lufs_i.median, 1)
-                      + fr (" LUFS intégré), plafond ") + juce::String (ceilingDb, 1) + " dBTP");
-    }
     else if (targetIndex > 0 && targetIndex < sameLevelTarget)
     {
         r.loudPassageTarget = loudnessTargets[targetIndex].lufs + 1.0f;   // integrated target -> loud passages ~1 dB above
         r.integratedTarget = loudnessTargets[targetIndex].lufs;
-        r.report.add (fr ("Volume : cible ") + loudnessTargets[targetIndex].name + fr (" (choisie à la main)"));
     }
-    if (r.loudPassageTarget > -6.5f && ceilingDb > -0.5f)
-        r.report.add (fr ("Style très fort : le clipper fait une partie du travail pour garder le punch du kick"));
+
+    // ---- Dynamics: the peaks of the loud passages must come down by (crest now) - (ceiling - target loudness).
+    // That reduction is shared: compression ~1-2 dB, clipper up to ~4-5 dB, limiter the rest (kept around 2-3 dB).
+    {
+        const float loud = f.loudLufs > -60.0f ? f.loudLufs : f.integratedLufs;
+        const float crestIn = (f.hasSpectrum ? f.truePeakDb : f.peakDb) - loud;
+        const float crestOut = ceilingDb - r.loudPassageTarget;
+        const float reduce = crestIn - crestOut;
+        b.compDetail = lofi ? 0.7f : 0.5f;
+        if (crestIn < p.plr_drop.p25 - 2.0f && crestIn < 7.0f)
+        {
+            b.compGlue = 0.0f; b.compPunch = 0.0f; b.clipAmt = 0.1f;
+            r.mixNotes.add (fr ("Mix déjà très compressé (crête/volume ") + juce::String (crestIn, 1) + fr (" dB sur les passages forts) : plus de limiteur ne le rendra pas plus percutant. Allège la compression du bus dans le mix."));
+            r.report.add (fr ("Mix déjà compressé → pas de compression en plus, clipper léger"));
+        }
+        else
+        {
+            if (lofi)
+            {
+                b.clipAmt = juce::jlimit (0.0f, 0.25f, 0.03f * reduce);
+                b.compGlue = 0.15f;
+                b.compPunch = 0.0f;
+            }
+            else
+            {
+                b.clipAmt = juce::jlimit (0.05f, hard ? 0.85f : 0.75f, 0.05f + 0.065f * reduce);
+                b.compGlue = reduce > 6.0f ? juce::jlimit (0.2f, 0.5f, 0.15f + 0.03f * reduce) : 0.2f;
+                b.compPunch = 0.2f;
+            }
+            r.report.add (fr ("Dynamique : crêtes à ") + juce::String (crestIn, 1) + fr (" dB au-dessus du volume des passages forts ; pour ") + juce::String (r.loudPassageTarget, 1)
+                          + fr (" LUFS sous ") + juce::String (ceilingDb, 1) + fr (" dBTP il faut ") + juce::String (crestOut, 1) + fr (" dB → ") + juce::String (std::max (0.0f, reduce), 1)
+                          + fr (" dB à absorber : compression ") + pct (b.compGlue) + ", clipper " + pct (b.clipAmt) + fr (", le limiteur fait le reste"));
+        }
+        b.satDrive = lofi ? 0.3f : (hard ? 0.25f : 0.15f);
+    }
+
+    if (targetIndex == styleTarget)
+        r.report.add (fr ("Volume : passages forts à ") + juce::String (r.loudPassageTarget, 1) + fr (" LUFS (médiane des références, ") + juce::String (p.lufs_i.median, 1)
+                      + fr (" LUFS intégré), plafond ") + juce::String (ceilingDb, 1) + " dBTP");
+    else if (targetIndex > 0 && targetIndex < sameLevelTarget)
+        r.report.add (fr ("Volume : cible ") + loudnessTargets[targetIndex].name + fr (" (choisie à la main)"));
     return r;
+}
+// ============================================================================================ second pass (processed output)
+
+void AutoMaster::refine (const AudioFeatures& out, float avgGr, AutoResult& r)
+{
+    if (! r.valid || ! out.valid || ! out.hasSpectrum) return;
+    const auto& p = profile (r.style);
+    const bool lofi = r.style == styleLofi;
+    auto& b = r.base;
+
+    // Tone: what is still off once compression / clipper / limiter have done their part
+    const auto t = analyseTone (out, p, 0.75f);
+    std::array<float, 6> now {};
+    for (int k = 0; k < 6; ++k) now[(size_t) k] = getTool (b, k);
+    const auto g = fitToneBounded (t, lofi, now);
+    juce::String moves;
+    for (int k = 0; k < 6; ++k)
+    {
+        if (std::abs (g[(size_t) k]) < 0.3f) continue;
+        const auto lim = toolLimits (k, lofi);
+        const float before = getTool (b, k), after = juce::jlimit (lim.lo, lim.hi, before + g[(size_t) k]);
+        if (std::abs (after - before) < 0.2f) continue;
+        setTool (b, k, after);
+        moves << (moves.isEmpty() ? "" : ", ") << toolName (k) << " " << dbs (before) << fr (" → ") << dbs (after);
+    }
+    r.report.add (fr ("Vérification sur le son traité : écart tonal ") + juce::String (t.error, 1) + " dB"
+                  + (moves.isNotEmpty() ? fr (", ajusté : ") + moves
+                                        : (t.error > 0.8f ? fr (", correction déjà au maximum autorisé (le reste est à traiter dans le mix)") : fr (", rien à reprendre"))));
+
+    // Dynamics: the limiter should not be doing all the work (it would pump and flatten the kick)
+    const float crestOut = out.truePeakDb - out.loudLufs;
+    if (avgGr > 4.0f && ! lofi)
+    {
+        b.clipAmt = std::min (0.85f, b.clipAmt + 0.15f);
+        b.compGlue = std::min (0.55f, b.compGlue + 0.05f);
+        r.report.add (fr ("Le limiteur travaillait trop (") + juce::String (avgGr, 1) + fr (" dB) → clipper ") + pct (b.clipAmt) + ", compression " + pct (b.compGlue));
+        if (avgGr > 7.0f)
+        {
+            r.loudPassageTarget -= 1.0f;
+            r.report.add (fr ("Cible baissée de 1 dB pour garder le punch (") + juce::String (r.loudPassageTarget, 1) + " LUFS)");
+        }
+    }
+    else
+        r.report.add (fr ("Dynamique après traitement : limiteur ") + juce::String (avgGr, 1) + fr (" dB en moyenne, crêtes à ") + juce::String (crestOut, 1)
+                      + fr (" dB au-dessus du volume (références : ") + juce::String (p.plr_drop.median, 1) + fr (" dB, mais elles dépassent souvent 0 dBTP)"));
+}
+
+void AutoMaster::finalCheck (const AudioFeatures& out, AutoResult& r)
+{
+    if (! r.valid || ! out.valid || ! out.hasSpectrum) return;
+    const auto& p = profile (r.style);
+    const auto t = analyseTone (out, p, 1.0f);
+    r.toneErrorAfter = t.error;
+    r.report.add (fr ("Résultat : écart tonal aux références ") + juce::String (r.toneErrorBefore, 1) + fr (" dB avant → ") + juce::String (t.error, 1)
+                  + fr (" dB après ; passages forts à ") + juce::String (out.loudLufs, 1) + " LUFS, true peak " + juce::String (out.truePeakDb, 1) + " dBTP");
 }

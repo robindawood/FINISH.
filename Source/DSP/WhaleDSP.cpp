@@ -165,12 +165,15 @@ void WhaleDSP::process (juce::AudioBuffer<float>& buffer, const Settings& s) noe
     if (n == 0 || nc == 0) return;
 
     // Closed-loop loudness: while the loud passages play, nudge the drive until they sit on the target.
+    // Only the loud passages of the INPUT drive the loop: otherwise a breakdown pulls the gain up (up to +8 dB), the
+    // next drop comes out several dB too loud and the song's sections get flattened.
     if (s.autoLoudness && ! s.bypass)
     {
-        const float outShort = powerToLufs (pOutShort);
+        const float outShort = powerToLufs (pOutShort), inShort = powerToLufs (pInShort);
         const float err = s.targetLufs - outShort;
-        if (outShort > s.targetLufs - 6.0f && powerToLufs (pInShort) > -50.0f && ! (err > 0 && -gainToDb (limGain) > 8.0f))
-            corrDb = juce::jlimit (-8.0f, 8.0f, corrDb + err * (float) n / (float) (sr * 6.0));
+        const bool loudPassage = inShort > -50.0f && inShort >= s.loudInputLufs - 2.5f;
+        if (loudPassage && outShort > s.targetLufs - 6.0f && ! (err > 0 && -gainToDb (limGain) > 8.0f))
+            corrDb = juce::jlimit (-14.0f, 14.0f, corrDb + err * (float) n / (float) (sr * 6.0));
     }
     else if (! s.autoLoudness)
         corrDb = 0.0f;

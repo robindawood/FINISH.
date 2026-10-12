@@ -6,6 +6,7 @@
 #include "Analysis/AnalysisSession.h"
 #include "DSP/WhaleDSP.h"
 #include "Auto/AutoMaster.h"
+#include "Auto/SpectralCapture.h"
 #include "Presets/Presets.h"
 
 // Threads:
@@ -74,6 +75,9 @@ private:
     WhaleDSP dsp;
     AudioAnalyzer inAnalyzer, outAnalyzer;
     AnalysisSession autoSession;
+    SpectralCapture inCap, outCap;                       // AUTO: spectra measured like the reference profiles
+    std::vector<AnalysisFrame> verifyOutFrames;          // output loudness frames during a verification capture
+    std::atomic<bool> capInput { false };                // audio thread: block is not silence
     std::vector<AnalysisFrame> recentIn, recentOut;     // rolling windows (message thread)
     std::vector<float> envLow, envHigh;                  // rhythm envelopes heard by AUTO (tempo when the host gives none)
 
@@ -86,11 +90,13 @@ private:
 
     std::atomic<double> hostBpm { 0.0 };
     std::atomic<float> effectiveTarget { -9.0f }, driveFF { 0.0f };
-    float inputLoudPassage = -70.0f, outIntegrated = -70.0f;
+    std::atomic<float> inputLoudPassage { -70.0f };      // read by the audio thread (loudness loop gate)
+    float outIntegrated = -70.0f;
 
     AutoState autoState = AutoState::idle;
     bool waitingForAudio = false;
-    double verifySeconds = 0.0, grAcc = 0.0;
+    double verifySeconds = 0.0, grAcc = 0.0, verifyPhaseStart = 0.0;
+    int verifyPhase = 0;                                 // 0 settle, 1 measure + refine, 2 final measurement
     int grCount = 0;
     AutoResult autoResult;
     ModuleBase beforeAuto;
@@ -101,7 +107,23 @@ private:
     bool souffleArmed = false;
     double verdictHold = 0.0;
 
-    static constexpr double listenSeconds = 12.0, verifyDuration = 6.0;
+    static AudioFeatures makeFeatures (const std::vector<AnalysisFrame>& frames, const SpectralCapture::Result& spec);
+    void finishListening();
+    void startVerifyCapture();
+    // What the processed output of the LISTENED passages looks like: listened spectrum + (output - input) measured
+    // simultaneously on the same loud passages during verification (robust to the song moving to a breakdown).
+    AudioFeatures estimateProcessed() const;
+
+    AudioFeatures listenedFeatures;
+    float autoInputLoud = -70.0f;                        // loud-passage loudness of what AUTO listened to
+    std::atomic<float> autoInputLoudRef { -100.0f };
+    bool verifyGateOpen = false;
+    double verifyPhaseWall = 0.0;                        // time spent in the current phase (also while gated)
+
+    // AUTO listens 30 s of playing audio (silence is not counted); the spectrum keeps the loudest 60 % of it.
+    // Then: 3 s settle, 15 s measured on the processed output -> second pass, 10 s -> final measurement.
+    static constexpr double listenSeconds = 30.0, settleSeconds = 3.0, refineSeconds = 15.0, finalSeconds = 10.0;
+    static constexpr double verifyDuration = settleSeconds + refineSeconds + finalSeconds;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (WhaleAudioProcessor)
 };
