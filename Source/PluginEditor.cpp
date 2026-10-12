@@ -19,8 +19,6 @@ WhaleEditor::WhaleEditor (WhaleAudioProcessor& p)
     content.addAndMakeVisible (targetBox);
     content.addAndMakeVisible (dosage);
     content.addAndMakeVisible (meters);
-    content.addChildComponent (expert);
-    content.addChildComponent (browser);
 
     for (auto& n : styleNames()) styleBox.addItem (n, styleBox.getNumItems() + 1);
     for (auto& t : loudnessTargets) targetBox.addItem (t.name, targetBox.getNumItems() + 1);
@@ -47,6 +45,9 @@ WhaleEditor::WhaleEditor (WhaleAudioProcessor& p)
         knobs.back()->slider.setTooltip (fr (tips[i]));
         content.addAndMakeVisible (*knobs.back());
     }
+
+    content.addChildComponent (expert);
+    content.addChildComponent (browser);
 
     autoButton.onClick = [this] { proc.toggleAuto(); };
     autoButton.setTooltip (fr ("Lance la lecture sur la partie la plus forte, puis clique : WHALE écoute 12 s, règle tout, puis vérifie. Re-clique pour annuler."));

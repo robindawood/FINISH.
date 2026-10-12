@@ -18,6 +18,7 @@ struct TestAccess
     static void openExpert (WhaleEditor& e, int m) { e.openExpert (m); }
     static void showBrowser (WhaleEditor& e) { e.browser.refresh(); e.browser.setVisible (true); }
     static void hideBrowser (WhaleEditor& e) { e.browser.setVisible (false); }
+    static juce::Component& browser (WhaleEditor& e) { return e.browser; }
 };
 
 namespace
@@ -314,6 +315,12 @@ namespace
         TestAccess::openExpert (*ed, -1);
         TestAccess::showBrowser (*ed); play (0.5);
         snapshot (*ed, dir.getChildFile ("whale_6_presets.png"));
+        {
+            auto& b = TestAccess::browser (*ed);
+            auto img = b.createComponentSnapshot (b.getLocalBounds(), true, 1.0f);
+            juce::PNGImageFormat png; auto f = dir.getChildFile ("debug_browser.png"); f.deleteFile();
+            juce::FileOutputStream os (f); png.writeImageToStream (img, os);
+        }
         // too loud: manual gain far above the style target
         TestAccess::hideBrowser (*ed);
         setParam (p, PID::target, (float) manualTarget);

@@ -21,6 +21,9 @@ PresetBrowser::PresetBrowser (WhaleAudioProcessor& p) : proc (p)
     search.setTextToShowWhenEmpty (fr ("Rechercher un preset…"), dim);
     search.setFont (body (14.0f));
     search.setIndents (30, 7);
+    search.setColour (juce::TextEditor::backgroundColourId, juce::Colours::transparentBlack);
+    search.setColour (juce::TextEditor::outlineColourId, juce::Colours::transparentBlack);
+    search.setColour (juce::TextEditor::focusedOutlineColourId, juce::Colours::transparentBlack);
     search.onTextChange = [this] { scroll = 0; rebuild(); repaint(); };
     addAndMakeVisible (search);
     rebuild();
@@ -92,8 +95,12 @@ void PresetBrowser::paint (juce::Graphics& g)
     g.fillRoundedRectangle (p, 16.0f);
     g.setColour (juce::Colour (0xff6e50be));
     g.drawRoundedRectangle (p, 16.0f, 1.4f);
-    // search icon
+    // search field + icon
     const auto sb = search.getBounds().toFloat();
+    g.setColour (field);
+    g.fillRoundedRectangle (sb, 8.0f);
+    g.setColour (search.hasKeyboardFocus (true) ? magenta : lineHi);
+    g.drawRoundedRectangle (sb, 8.0f, 1.2f);
     g.setColour (dim);
     g.drawEllipse (sb.getX() + 10, sb.getCentreY() - 7, 11, 11, 1.8f);
     g.drawLine (sb.getX() + 19, sb.getCentreY() + 3, sb.getX() + 24, sb.getCentreY() + 8, 1.8f);
