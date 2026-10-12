@@ -1,1341 +1,398 @@
-// Offline test runner for FINISH: DSP safety, analysis/diagnosis on synthetic mixes,
-// intent parsing, state round-trip and (optionally) a PNG snapshot of the editor.
+// WHALE offline tests: DSP safety, loudness, AUTO against the reference profiles, presets, state, snapshots.
 //
-//   FinishTests                 run all tests
-//   FinishTests --snapshot x.png  also render the UI after a full analysis
-
+//   WhaleTests                       run all tests
+//   WhaleTests --snap <dir> [wav]    render screenshots of the editor (optionally driven by a real track)
+//   WhaleTests --render <in.wav> <out.wav> [style]   master a file offline with AUTO (for listening tests)
 #include <JuceHeader.h>
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
-#include "Music/SectionDetector.h"
-#include <random>
 
-int failures = 0, checks = 0;
-void runComposeTests();
-void runProjectTests();
-#define CHECK(cond, msg) do { ++checks; if (! (cond)) { ++failures; std::cout << "  FAIL: " << msg << "  (" #cond ")\n"; } } while (0)
+static int failures = 0;
+#define CHECK(cond, msg) do { if (! (cond)) { ++failures; std::cout << "  FAIL: " << msg << "  (" #cond ")\n"; } else std::cout << "  ok  : " << msg << "\n"; } while (0)
 
-// --------------------------------------------------------------------------------------
-// Synthetic music
-
-struct MixOptions
+struct TestAccess
 {
-    double sr = 48000.0;
-    float levelDb = 0.0f;       // overall gain
-    bool arrangement = true;    // intro / build / drop / break / drop / outro
-    float seconds = 150.0f;
-    float width = 1.0f;         // 0 = mono, 1 = normal stereo pad
-    bool invertRight = false;   // phase problem
-    bool squash = false;        // brickwall + clipping
-    bool denseBuild = false;    // build already at drop energy (weak BUILD -> DROP contrast)
-    bool denseBreak = false;    // break keeps the drums (doesn't breathe)
+    static void pump (WhaleAudioProcessor& p) { p.timerCallback(); }
+    static void tickEditor (WhaleEditor& e) { e.forcedDt = 1.0f / 60.0f; e.timerCallback(); }
+    static juce::Component& content (WhaleEditor& e) { return e.content; }
+    static void openExpert (WhaleEditor& e, int m) { e.openExpert (m); }
+    static void showBrowser (WhaleEditor& e) { e.browser.refresh(); e.browser.setVisible (true); }
+    static void hideBrowser (WhaleEditor& e) { e.browser.setVisible (false); }
 };
 
-static juce::AudioBuffer<float> makeMix (const MixOptions& o)
+namespace
 {
-    const int n = (int) (o.seconds * o.sr);
-    juce::AudioBuffer<float> b (2, n);
-    b.clear();
-    std::mt19937 rng (1234);
-    std::uniform_real_distribution<float> noise (-1.0f, 1.0f);
-    const double beat = 60.0 / 124.0;
-    const double twoPi = juce::MathConstants<double>::twoPi;
-    float hpState = 0, lpBass = 0;
-    double bassPhase = 0, kickPhase = 0;
+    constexpr double sr = 44100.0;
+    constexpr int block = 512;
 
-    for (int i = 0; i < n; ++i)
+    float dbOf (float g) { return 20.0f * std::log10 (std::max (g, 1.0e-9f)); }
+
+    // A small club-like mix: 4/4 kick, off-beat bass, hats, a chord pad. Deterministic.
+    struct MixGen
     {
-        const double t = i / o.sr;
-        // Arrangement energy per section
-        float drums = 1, bass = 1, pad = 1;
-        if (o.arrangement)
+        double t = 0, bpm = 126;
+        juce::Random r { 3 };
+        float pink[7] {};
+        float gainDb = -12.0f;
+        bool stereoBass = false, invertR = false;
+        void fill (juce::AudioBuffer<float>& b)
         {
-            const double frac = t / o.seconds;
-            if (frac < 0.12)      { drums = 0.0f; bass = 0.0f; pad = 0.6f; }            // intro
-            else if (frac < 0.25) { drums = o.denseBuild ? 1.0f : (float) ((frac - 0.12) / 0.13) * 0.8f; bass = o.denseBuild ? 1.0f : 0.4f; pad = o.denseBuild ? 1.0f : 0.8f; } // build
-            else if (frac < 0.48) { drums = 1; bass = 1; pad = 1; }                        // drop
-            else if (frac < 0.62) { drums = 0.0f; bass = o.denseBreak ? 1.0f : 0.2f; pad = o.denseBreak ? 2.0f : 0.7f; } // break
-            else if (frac < 0.88) { drums = 1; bass = 1; pad = 1; }                        // drop 2
-            else                  { drums = 0.3f; bass = 0.0f; pad = 0.5f; }               // outro
-        }
-        const double inBeat = std::fmod (t, beat);
-        const int beatIndex = (int) (t / beat);
-
-        // Kick: pitch-dropping sine with sharp attack
-        float kick = 0;
-        {
-            const double env = std::exp (-inBeat * 18.0);
-            const double f = 50.0 + 120.0 * std::exp (-inBeat * 40.0);
-            kickPhase += twoPi * f / o.sr;
-            if (inBeat < 1.0 / o.sr) kickPhase = 0;
-            kick = (float) (std::sin (kickPhase) * env) * 0.9f;
-        }
-        // Snare on 2 and 4
-        float snare = 0;
-        if (beatIndex % 2 == 1)
-            snare = noise (rng) * (float) std::exp (-inBeat * 22.0) * 0.45f;
-        // Hats on 8ths (high-passed noise)
-        const double in8 = std::fmod (t, beat * 0.5);
-        const float hn = noise (rng);
-        hpState = 0.6f * hpState + 0.4f * hn;
-        const float hat = (hn - hpState) * (float) std::exp (-in8 * 45.0) * 0.5f;
-        // Bass: filtered saw at 55 Hz, sidechained by the kick
-        bassPhase += 55.0 / o.sr;
-        const float saw = (float) (2.0 * (bassPhase - std::floor (bassPhase)) - 1.0);
-        lpBass = 0.97f * lpBass + 0.03f * saw;
-        const float duck = 1.0f - 0.7f * drums * (float) std::exp (-inBeat * 8.0);
-        const float bassS = lpBass * 0.6f * duck;
-        // Pad: detuned chord, decorrelated left/right
-        float padL = 0, padR = 0;
-        for (double f : { 220.0, 277.18, 329.63, 440.0 })
-        {
-            padL += (float) std::sin (twoPi * f * 1.003 * t) * 0.09f;
-            padR += (float) std::sin (twoPi * f * 0.997 * t + 1.3) * 0.09f;
-        }
-
-        const float centre = drums * (kick + snare) + bass * bassS;
-        const float hatL = drums * hat * 0.8f, hatR = drums * hat * 1.0f;
-        const float pm = 0.5f * (padL + padR), ps = 0.5f * (padL - padR) * o.width;
-        float l = centre + hatL * (0.5f + 0.5f * o.width) + hatR * (0.5f - 0.5f * o.width) + pad * (pm + ps);
-        float r = centre + hatR * (0.5f + 0.5f * o.width) + hatL * (0.5f - 0.5f * o.width) + pad * (pm - ps);
-        b.setSample (0, i, l);
-        b.setSample (1, i, o.invertRight ? -r : r);
-    }
-
-    if (o.squash)
-    {
-        b.applyGain (6.0f);
-        for (int ch = 0; ch < 2; ++ch)
-            for (int i = 0; i < n; ++i)
-                b.setSample (ch, i, std::tanh (b.getSample (ch, i) * 2.5f) / std::tanh (2.5f));
-    }
-
-    const float peak = b.getMagnitude (0, n);
-    b.applyGain (juce::Decibels::decibelsToGain (o.levelDb) * (o.squash ? 0.999f : 0.5f) / std::max (peak, 1.0e-6f));
-    return b;
-}
-
-static AudioFeatures measure (const juce::AudioBuffer<float>& b, double sr, int startSample = 0, MusicState* music = nullptr)
-{
-    AudioAnalyzer a;
-    a.setPublishSamples (false);
-    a.prepare (sr);
-    AnalysisSession s;
-    std::vector<AnalysisFrame> tmp (512);
-    const int n = b.getNumSamples() - startSample;
-    for (int pos = 0; pos < n; pos += 4096)
-    {
-        const int len = std::min (4096, n - pos);
-        a.process (b.getReadPointer (0, startSample + pos), b.getNumChannels() > 1 ? b.getReadPointer (1, startSample + pos) : nullptr, len);
-        for (int got; (got = a.readFrames (tmp.data(), 512)) > 0;)
-            for (int i = 0; i < got; ++i) s.add (tmp[(size_t) i]);
-    }
-    if (music != nullptr) *music = SectionDetector().analyze (s.getFrames());
-    return s.computeFeatures();
-}
-
-static void printFeatures (const char* name, const AudioFeatures& f)
-{
-    std::cout << "  [" << name << "] LUFS " << f.integratedLufs << "  peak " << f.peakDb << "  PLR " << f.plr
-              << "  LRA " << f.loudnessRange << "  low " << f.lowRatio << "  high " << f.highRatio
-              << "  side " << f.sideRatio << "  lowSide " << f.lowSideRatio << "  corr " << f.correlation
-              << "  punch " << f.punchIndex << "\n";
-}
-
-static void runDSP (FinishDSP& dsp, juce::AudioBuffer<float>& b, const FinishDSP::Settings& s, int block = 512)
-{
-    for (int pos = 0; pos < b.getNumSamples(); pos += block)
-    {
-        const int len = std::min (block, b.getNumSamples() - pos);
-        juce::AudioBuffer<float> view (b.getArrayOfWritePointers(), b.getNumChannels(), pos, len);
-        dsp.process (view, s);
-    }
-}
-
-static bool allFinite (const juce::AudioBuffer<float>& b)
-{
-    for (int ch = 0; ch < b.getNumChannels(); ++ch)
-        for (int i = 0; i < b.getNumSamples(); ++i)
-            if (! std::isfinite (b.getSample (ch, i))) return false;
-    return true;
-}
-
-// --------------------------------------------------------------------------------------
-
-static void testTransparency()
-{
-    std::cout << "DSP: neutral settings are transparent (latency-compensated)\n";
-    MixOptions o; o.seconds = 10; o.levelDb = -3.0f;   // peak -9 dBFS
-    auto in = makeMix (o);
-    auto out = in;
-    FinishDSP dsp; dsp.prepare (o.sr, 512, 2);
-    const int L = dsp.getLatencySamples();
-    CHECK (L > 0 && L < (int) (o.sr * 0.005), "look-ahead latency out of range");
-    runDSP (dsp, out, {});
-    float maxDiff = 0;
-    for (int ch = 0; ch < 2; ++ch)
-        for (int i = 0; i + L < in.getNumSamples(); ++i)
-            maxDiff = std::max (maxDiff, std::abs (in.getSample (ch, i) - out.getSample (ch, i + L)));
-    std::cout << "  latency " << L << " samples, max difference " << maxDiff << "\n";
-    CHECK (maxDiff < 1.0e-4f, "neutral chain changes the audio");
-}
-
-static float manualDrive (const MacroSettings& m) { return m.loudness * m.amount * 10.0f; }
-
-static void testStrategies()
-{
-    std::cout << "DSP: strategies are safe, deterministic, audible; A/B is level-matched\n";
-    MixOptions o; o.seconds = 40; o.arrangement = false; o.levelDb = -14.0f;
-    const auto in = makeMix (o);
-    const auto fin = measure (in, o.sr, (int) (o.sr * 10));
-    printFeatures ("input", fin);
-
-    const std::pair<const char*, MacroSettings> presets[] = {
-        { "PUNCH",   { 1.0f, 0.25f, 0.8f, 0.5f, 0.5f, 0.2f } },
-        { "WIDE",    { 1.0f, 0.1f, 0.15f, 0.8f, 0.5f, 0.1f } },
-        { "MASSIVE", { 1.0f, 0.7f, 0.2f, 0.5f, 0.6f, 0.9f } },
-        { "EXTREME", { 1.0f, 1.0f, 1.0f, 1.0f, 0.0f, 1.0f } },
-    };
-    for (auto& [name, m] : presets)
-    {
-        auto out = in, ab = in;
-        FinishDSP::Settings s; s.macros = m; s.driveDb = manualDrive (m);
-        { FinishDSP dsp; dsp.prepare (o.sr, 512, 2); runDSP (dsp, out, s); }
-        auto sb = s; sb.bypass = true; sb.matchAB = true;
-        { FinishDSP dsp; dsp.prepare (o.sr, 512, 2); runDSP (dsp, ab, sb); }
-        const auto fo = measure (out, o.sr, (int) (o.sr * 10));
-        const auto fab = measure (ab, o.sr, (int) (o.sr * 10));
-        const float peakDb = juce::Decibels::gainToDecibels (out.getMagnitude (0, out.getNumSamples()));
-        std::cout << "  " << name << "  LUFS " << fo.integratedLufs << " (A/B original " << fab.integratedLufs << ")"
-                  << "  peak " << peakDb << "  PLR " << fo.plr << "  side " << fo.sideRatio << "  lowSide " << fo.lowSideRatio
-                  << "  punch " << fo.punchIndex << "\n";
-        CHECK (allFinite (out), juce::String (name) + " produced NaN/Inf");
-        CHECK (peakDb <= FinishDSP::defaultCeilingDb + 0.01f, juce::String (name) + " exceeds the ceiling");
-        CHECK (std::abs (fab.integratedLufs - fo.integratedLufs) < 1.0f, juce::String (name) + " A/B level match off by more than 1 LU");
-        if (juce::String (name) == "MASSIVE")
-            CHECK (fo.integratedLufs > fin.integratedLufs + 3.0f, "MASSIVE should be clearly louder");
-        if (juce::String (name) == "WIDE")
-        {
-            CHECK (fo.sideRatio > fin.sideRatio * 1.3f, "WIDE should widen");
-            CHECK (fo.lowSideRatio <= fin.lowSideRatio + 0.01f, "WIDE must not widen the bass");
-        }
-        if (juce::String (name) == "PUNCH")
-            CHECK (fo.punchIndex > fin.punchIndex + 0.5f, "PUNCH should strengthen transients");
-    }
-
-    // Determinism + block-size independence
-    FinishDSP::Settings s; s.macros = presets[2].second; s.driveDb = manualDrive (s.macros);
-    auto a = in, b2 = in;
-    { FinishDSP d; d.prepare (o.sr, 4096, 2); runDSP (d, a, s, 4096); }
-    { FinishDSP d; d.prepare (o.sr, 4096, 2); runDSP (d, b2, s, 4096); }
-    bool same = true;
-    for (int ch = 0; ch < 2 && same; ++ch)
-        same = std::memcmp (a.getReadPointer (ch), b2.getReadPointer (ch), sizeof (float) * (size_t) a.getNumSamples()) == 0;
-    CHECK (same, "offline render is not deterministic");
-}
-
-// True peak of a buffer: 8x oversampled with a long windowed sinc (independent of the plugin's own detector).
-static float truePeakDb (const juce::AudioBuffer<float>& b)
-{
-    constexpr int L = 8, half = 32;
-    std::vector<float> h ((size_t) (2 * half * L + 1));
-    for (int n = -half * L; n <= half * L; ++n)
-    {
-        const double x = (double) n / L;
-        const double sinc = n == 0 ? 1.0 : std::sin (juce::MathConstants<double>::pi * x) / (juce::MathConstants<double>::pi * x);
-        const double w = 0.5 + 0.5 * std::cos (juce::MathConstants<double>::pi * n / (half * L + 1));
-        h[(size_t) (n + half * L)] = (float) (sinc * w);
-    }
-    float peak = 0;
-    for (int ch = 0; ch < b.getNumChannels(); ++ch)
-    {
-        const float* x = b.getReadPointer (ch);
-        for (int i = half; i + half < b.getNumSamples(); ++i)
-            for (int ph = 0; ph < L; ++ph)
+            const double beat = 60.0 / bpm;
+            const float g = juce::Decibels::decibelsToGain (gainDb);
+            for (int i = 0; i < b.getNumSamples(); ++i, t += 1.0 / sr)
             {
-                float acc = 0;
-                for (int k = -half + 1; k <= half; ++k) acc += x[i + k] * h[(size_t) ((-k) * L + ph + half * L)];
-                peak = std::max (peak, std::abs (acc));
+                const double pb = std::fmod (t, beat);
+                const float kick = (float) (std::sin (2 * juce::MathConstants<double>::pi * (50.0 + 90.0 * std::exp (-pb * 30.0)) * pb) * std::exp (-pb * 7.0));
+                const double off = std::fmod (t + beat * 0.5, beat);
+                const float bass = (float) (0.5 * std::sin (2 * juce::MathConstants<double>::pi * 55.0 * t) * std::exp (-off * 5.0));
+                float w = r.nextFloat() * 2 - 1;
+                pink[0] = 0.99886f * pink[0] + w * 0.0555179f; pink[1] = 0.99332f * pink[1] + w * 0.0750759f;
+                pink[2] = 0.96900f * pink[2] + w * 0.1538520f; pink[3] = 0.86650f * pink[3] + w * 0.3104856f;
+                const float pn = (pink[0] + pink[1] + pink[2] + pink[3]) * 0.2f;
+                const double hb = std::fmod (t, beat * 0.5);
+                const float hat = (float) ((r.nextFloat() * 2 - 1) * std::exp (-hb * 60.0) * 0.25);
+                const float pad = 0.08f * (float) (std::sin (2 * juce::MathConstants<double>::pi * 220.0 * t) + std::sin (2 * juce::MathConstants<double>::pi * 277.2 * t + 1.0)
+                                                    + std::sin (2 * juce::MathConstants<double>::pi * 329.6 * t + 2.0));
+                const float L = g * (kick + bass + hat + pad + 0.15f * pn), R = g * (kick + (stereoBass ? -0.6f : 1.0f) * bass + 0.8f * hat + pad * 0.9f + 0.15f * pn);
+                b.setSample (0, i, L);
+                b.setSample (1, i, invertR ? -R : R);
             }
-    }
-    return juce::Decibels::gainToDecibels (peak);
-}
-
-// Reference true peak: exact band-limited 8x upsampling via FFT zero padding.
-static float truePeakFftDb (const juce::AudioBuffer<float>& b)
-{
-    const int order = 17, n = 1 << order, up = 8, nUp = n * up;
-    juce::dsp::FFT fwd (order), inv (order + 3);
-    float peak = 0;
-    for (int ch = 0; ch < b.getNumChannels(); ++ch)
-    {
-        std::vector<juce::dsp::Complex<float>> x ((size_t) n), X ((size_t) n), Y ((size_t) nUp, { 0, 0 }), y ((size_t) nUp);
-        for (int i = 0; i < n; ++i) x[(size_t) i] = { i < b.getNumSamples() ? b.getSample (ch, i) : 0.0f, 0.0f };
-        fwd.perform (x.data(), X.data(), false);
-        for (int k = 0; k < n / 2; ++k) { Y[(size_t) k] = X[(size_t) k]; Y[(size_t) (nUp - n / 2 + k)] = X[(size_t) (n / 2 + k)]; }
-        inv.perform (Y.data(), y.data(), true);
-        for (int i = up * 2000; i < nUp - up * 2000; ++i) peak = std::max (peak, std::abs (y[(size_t) i].real()) * (float) up);
-    }
-    return juce::Decibels::gainToDecibels (peak);
-}
-
-// The plugin's detector design, reproduced (24 taps x 4 phases, Kaiser 9, cut-off 1.1 x Nyquist).
-static float pluginDetectorDb (const juce::AudioBuffer<float>& b, int T = 24, double beta = 9.0, double fcut = 1.1)
-{
-    constexpr int L = 4;
-    const int N = T * L;
-    std::vector<double> h ((size_t) N);
-    auto bessel0 = [] (double x) { double sum = 1, t = 1; for (int k = 1; k < 25; ++k) { t *= (x / (2 * k)) * (x / (2 * k)); sum += t; } return sum; };
-    for (int n = 0; n < N; ++n)
-    {
-        const double m = n - (N - 1) / 2.0, x = m / L, ax = juce::MathConstants<double>::pi * x * fcut;
-        const double sinc = std::abs (x) < 1.0e-12 ? 1.0 : std::sin (ax) / ax;
-        const double r = 2.0 * n / (N - 1) - 1.0;
-        h[(size_t) n] = sinc * bessel0 (beta * std::sqrt (std::max (0.0, 1.0 - r * r))) / bessel0 (beta);
-    }
-    std::vector<std::vector<float>> c (L, std::vector<float> ((size_t) T));
-    for (int ph = 0; ph < L; ++ph) { double sum = 0; for (int k = 0; k < T; ++k) sum += h[(size_t) (k * L + ph)]; for (int k = 0; k < T; ++k) c[(size_t) ph][(size_t) k] = (float) (h[(size_t) (k * L + ph)] / sum); }
-    float peak = 0;
-    for (int ch = 0; ch < b.getNumChannels(); ++ch)
-        for (int i = T; i < b.getNumSamples(); ++i)
-        {
-            peak = std::max (peak, std::abs (b.getSample (ch, i)));
-            for (int ph = 0; ph < L; ++ph) { float acc = 0; for (int k = 0; k < T; ++k) acc += c[(size_t) ph][(size_t) k] * b.getSample (ch, i - k); peak = std::max (peak, std::abs (acc)); }
         }
-    return juce::Decibels::gainToDecibels (peak);
-}
-
-static void testTruePeakDetector()
-{
-    std::cout << "DSP: inter-sample peaks are caught (sine at fs/4, 45 degrees: true peak 3 dB above the samples)\n";
-    for (double f : { 12000.0, 11000.0, 7000.0, 15000.0, 19000.0, 21000.0, 23000.0 })
-    {
-        const double sr = 48000.0;
-        juce::AudioBuffer<float> b (2, (int) sr * 2);
-        const float amp = juce::Decibels::decibelsToGain (1.0f);   // true peak +1 dBTP
-        for (int i = 0; i < b.getNumSamples(); ++i)
-            for (int ch = 0; ch < 2; ++ch)
-                b.setSample (ch, i, amp * (float) std::sin (2.0 * juce::MathConstants<double>::pi * f * i / sr + juce::MathConstants<double>::pi / 4));
-        const float inTp = truePeakDb (b);
-        FinishDSP dsp; dsp.prepare (sr, 512, 2);
-        FinishDSP::Settings s;
-        if (std::getenv ("TPDRIVE")) s.driveDb = (float) std::atof (std::getenv ("TPDRIVE"));
-        if (std::getenv ("TPGLUE")) s.glue = 0.7f;
-        runDSP (dsp, b, s);
-        juce::AudioBuffer<float> tail (2, (int) sr);
-        for (int ch = 0; ch < 2; ++ch) tail.copyFrom (ch, 0, b, ch, (int) sr, (int) sr);
-        const float outTp = truePeakDb (tail);
-        std::cout << "  " << f << " Hz: in " << inTp << " dBTP -> out " << outTp << " dBTP\n";
-        CHECK (outTp <= FinishDSP::defaultCeilingDb + 0.3f, "inter-sample peak not caught at " + juce::String (f));
-    }
-}
-
-static void testLimiterOnMusic()
-{
-    std::cout << "DSP: limiter alone on dense music, +12 dB drive\n";
-    MixOptions o; o.seconds = 20; o.arrangement = false; o.levelDb = -6.0f;
-    auto out = makeMix (o);
-    FinishDSP dsp; dsp.prepare (o.sr, 512, 2);
-    FinishDSP::Settings s; s.driveDb = 12.0f;
-    if (std::getenv ("LIMGLUE")) s.glue = 0.7f;
-    if (std::getenv ("LIMCLIP")) s.clip = 0.6f;
-    runDSP (dsp, out, s);
-    juce::AudioBuffer<float> part (2, (int) (o.sr * 6));
-    for (int ch = 0; ch < 2; ++ch) part.copyFrom (ch, 0, out, ch, (int) (o.sr * 10), part.getNumSamples());
-    std::cout << "  sample peak " << juce::Decibels::gainToDecibels (part.getMagnitude (0, part.getNumSamples())) << "  TP " << truePeakDb (part)
-              << "  detector " << pluginDetectorDb (part) << "\n";
-}
-
-static void testLoudnessTargets()
-{
-    std::cout << "DSP: mastering targets reach their loudness under the true-peak ceiling\n";
-    for (float inLevel : { -6.0f, -20.0f })
-    {
-        MixOptions o; o.seconds = 45; o.arrangement = false; o.levelDb = inLevel;
-        const auto in = makeMix (o);
-        const auto fin = measure (in, o.sr, (int) (o.sr * 5));
-        for (float target : { -14.0f, -11.0f, -9.0f })
-            for (float ceiling : { -1.0f, -0.3f })
-            {
-                auto out = in;
-                FinishDSP dsp; dsp.prepare (o.sr, 512, 2);
-                FinishDSP::Settings s; s.autoLoudness = true; s.targetLufs = target; s.ceilingDb = ceiling;
-                s.macros = { 1.0f, 0.3f, 0.3f, 0.5f, 0.5f, 0.3f };
-                s.glue = std::getenv ("NOGLUE") ? 0.0f : 0.7f; s.clip = std::getenv ("NOCLIP") ? 0.0f : (target > -10.0f ? 0.65f : 0.4f);   // the processor's mastering stage
-                // open-loop guess like the processor does (limiter efficiency 0.75)
-                const float wanted = target - fin.integratedLufs, headroom = ceiling - fin.peakDb;
-                s.driveDb = wanted <= headroom ? wanted : headroom + (wanted - headroom) / 0.75f;
-                runDSP (dsp, out, s);
-                const auto fo = measure (out, o.sr, (int) (o.sr * 20));
-                const float peakDb = juce::Decibels::gainToDecibels (out.getMagnitude (0, out.getNumSamples()));
-                std::cout << "  in " << fin.integratedLufs << " -> target " << target << " / ceiling " << ceiling
-                          << ": out " << fo.integratedLufs << " LUFS, peak " << juce::String (peakDb, 3) << ", correction "
-                          << dsp.getLoudnessCorrectionDb() << " dB\n";
-                CHECK (std::abs (fo.integratedLufs - target) < 1.5f, "target " + juce::String (target) + " missed from " + juce::String (inLevel));
-                CHECK (peakDb <= ceiling + 0.01f, "ceiling " + juce::String (ceiling) + " exceeded");
-                CHECK (allFinite (out), "NaN in loudness target test");
-                if (inLevel > -10.0f && ceiling < -0.5f)
-                {
-                    juce::AudioBuffer<float> part (2, (int) (o.sr * 6));
-                    for (int ch = 0; ch < 2; ++ch) part.copyFrom (ch, 0, out, ch, (int) (o.sr * 30), part.getNumSamples());
-                    const float tp = truePeakDb (part);
-                    const float tpRef = truePeakFftDb (part);
-                    CHECK (tpRef <= ceiling + 0.15f, "true peak (FFT reference) above the ceiling: " + juce::String (tpRef));
-                    std::cout << "      true peak (8x) " << tp << " dBTP, band GR " << dsp.getBandGrDb (0) << "/" << dsp.getBandGrDb (1) << "/" << dsp.getBandGrDb (2) << "\n";
-                    CHECK (tp <= ceiling + 0.15f, "true peak above the ceiling: " + juce::String (tp));
-                }
-            }
-    }
-}
-
-static float maxDiff (const juce::AudioBuffer<float>& a, const juce::AudioBuffer<float>& b);
-
-static void testCreativeFx()
-{
-    std::cout << "DSP: creative FX (filters, gate, echo, space) are audible and safe\n";
-    MixOptions o; o.seconds = 12; o.arrangement = false; o.levelDb = -10.0f;
-    const auto in = makeMix (o);
-    const auto fin = measure (in, o.sr, (int) (o.sr * 2));
-    struct Case { const char* name; CreativeFX fx; };
-    const Case cases[] = { { "HP", { 0.8f, 0, 0, 0, 0 } }, { "LP", { 0, 0.8f, 0, 0, 0 } },
-                           { "GATE", { 0, 0, 1.0f, 0, 0 } }, { "ECHO", { 0, 0, 0, 1.0f, 0 } }, { "SPACE", { 0, 0, 0, 0, 1.0f } } };
-    for (auto& c : cases)
-    {
-        auto out = in;
-        FinishDSP dsp; dsp.prepare (o.sr, 512, 2);
-        FinishDSP::Settings s; s.fx = c.fx; s.bpm = 128.0; s.ppq = -1.0;   // free-running tempo clock
-        runDSP (dsp, out, s);
-        const auto fo = measure (out, o.sr, (int) (o.sr * 2));
-        const float diff = maxDiff (in, out);
-        const float peakDb = juce::Decibels::gainToDecibels (out.getMagnitude (0, out.getNumSamples()));
-        std::cout << "  " << c.name << ": LUFS " << fo.integratedLufs << "  low " << fo.lowRatio << "  high " << fo.highRatio
-                  << "  peak " << peakDb << "\n";
-        CHECK (allFinite (out), juce::String (c.name) + " NaN");
-        CHECK (diff > 0.05f, juce::String (c.name) + " is not audible");
-        CHECK (peakDb <= FinishDSP::defaultCeilingDb + 0.01f, juce::String (c.name) + " exceeds the ceiling");
-        if (juce::String (c.name) == "HP") CHECK (fo.lowRatio < fin.lowRatio * 0.5f, "HP filter should remove lows");
-        if (juce::String (c.name) == "LP") CHECK (fo.highRatio < fin.highRatio * 0.5f, "LP filter should remove highs");
-        if (juce::String (c.name) == "GATE") CHECK (fo.integratedLufs < fin.integratedLufs - 1.0f, "gate should chop the level");
-    }
-}
-
-static void testSampleRates()
-{
-    std::cout << "DSP + analysis at 44.1 / 48 / 88.2 / 96 / 192 kHz\n";
-    for (double sr : { 44100.0, 48000.0, 88200.0, 96000.0, 192000.0 })
-    {
-        MixOptions o; o.sr = sr; o.seconds = 30; o.arrangement = false; o.levelDb = -6.0f;
-        const auto in = makeMix (o);
-        const auto fin = measure (in, sr, (int) (sr * 8));
-        auto out = in;
-        FinishDSP dsp; dsp.prepare (sr, 1024, 2);
-        FinishDSP::Settings s; s.macros = { 1.0f, 0.7f, 0.6f, 0.75f, 0.4f, 0.9f }; s.driveDb = manualDrive (s.macros);
-        s.fx = { 0.2f, 0.2f, 0.3f, 0.3f, 0.3f };
-        runDSP (dsp, out, s, 1024);
-        const auto fo = measure (out, sr, (int) (sr * 8));
-        const float peakDb = juce::Decibels::gainToDecibels (out.getMagnitude (0, out.getNumSamples()));
-        std::cout << "  " << sr << " Hz: in " << fin.integratedLufs << " LUFS (punch " << fin.punchIndex << ", low " << fin.lowRatio
-                  << ")  out " << fo.integratedLufs << " LUFS, peak " << peakDb << ", latency " << dsp.getLatencySamples() << "\n";
-        CHECK (allFinite (out), "NaN at " + juce::String (sr));
-        CHECK (peakDb <= FinishDSP::defaultCeilingDb + 0.01f, "ceiling exceeded at " + juce::String (sr));
-        CHECK (fo.integratedLufs > -40.0f, "output vanished at " + juce::String (sr));
-    }
-}
-
-static void testDiagnosis()
-{
-    std::cout << "Analysis & diagnosis on synthetic mixes\n";
-    DiagnosisEngine de;
-    DecisionEngine dec;
-    ReferenceProfile noRef;
-
-    auto run = [&] (const char* name, const MixOptions& o, std::vector<Diagnosis>& d, DecisionResult& r, MusicState& m)
-    {
-        const auto mix = makeMix (o);
-        const auto f = measure (mix, o.sr, 0, &m);
-        printFeatures (name, f);
-        d = de.analyze (f, m, noRef);
-        r = dec.build (d, {}, true);
-        std::cout << "    score " << DiagnosisEngine::finishScore (d) << "  sections:";
-        for (auto& s : m.sections) std::cout << " " << s.label << "(" << (int) s.startTime << "-" << (int) s.endTime << ")";
-        std::cout << "\n    diagnoses:";
-        for (auto& x : d) std::cout << " [" << x.title << " " << x.severity << "]";
-        std::cout << "\n    strategies:";
-        for (auto& p : r.proposals) std::cout << " " << p.title << (p.refused ? "(refused)" : "") << " " << p.confidence;
-        std::cout << "\n";
-        return f;
     };
 
-    std::vector<Diagnosis> d; DecisionResult r; MusicState m;
-
-    MixOptions clean; clean.levelDb = -10.0f;   // quiet, punchy, decent width
-    run ("quiet clean mix", clean, d, r, m);
-    CHECK (DiagnosisEngine::has (d, DiagnosisType::TooQuiet), "quiet mix not flagged");
-    CHECK (! DiagnosisEngine::has (d, DiagnosisType::OverCompressed), "clean mix flagged as squashed");
-    CHECK (! DiagnosisEngine::has (d, DiagnosisType::WeakTransients), "clean punchy mix flagged as soft");
-    bool hasDrop = false; for (auto& s : m.sections) hasDrop |= s.type == SectionType::Drop;
-    CHECK (hasDrop && m.sections.size() >= 4, "arrangement sections not detected");
-    CHECK (! r.proposals.empty() && r.proposals[0].title == "MASSIVE", "quiet mix should recommend MASSIVE");
-
-    MixOptions squashed; squashed.squash = true;
-    run ("squashed mix", squashed, d, r, m);
-    CHECK (DiagnosisEngine::has (d, DiagnosisType::OverCompressed), "squashed mix not flagged");
-    CHECK (DiagnosisEngine::has (d, DiagnosisType::WeakTransients), "squashed mix transients not flagged");
-    bool massiveRefused = false; for (auto& p : r.proposals) if (p.title == "MASSIVE") massiveRefused = p.refused;
-    CHECK (massiveRefused, "MASSIVE must be refused on a squashed mix");
-    CHECK (r.proposals[0].title == "PUNCH", "squashed mix should recommend PUNCH");
-
-    MixOptions mono; mono.width = 0.0f; mono.levelDb = -4.0f;
-    run ("mono mix", mono, d, r, m);
-    CHECK (DiagnosisEngine::has (d, DiagnosisType::Narrow), "mono mix not flagged narrow");
-
-    MixOptions phase; phase.invertRight = true; phase.levelDb = -4.0f;
-    run ("phase-inverted mix", phase, d, r, m);
-    CHECK (DiagnosisEngine::has (d, DiagnosisType::StereoRisk), "phase problem not flagged");
-    bool wideRefused = false; for (auto& p : r.proposals) if (p.title == "WIDE") wideRefused = p.refused;
-    CHECK (wideRefused, "WIDE must be refused when mono compatibility is at risk");
-
-    MixOptions loop; loop.arrangement = false; loop.seconds = 90; loop.levelDb = -4.0f;
-    run ("flat loop", loop, d, r, m);
-    CHECK (DiagnosisEngine::has (d, DiagnosisType::FlatArrangement), "flat loop not flagged");
-
-    // Reference comparison: a quiet mix against a louder version of itself.
-    ReferenceProfile ref; ref.valid = true; ref.name = "Loud master";
-    MixOptions loud; loud.levelDb = 0.0f;
-    ref.features = measure (makeMix (loud), loud.sr);
-    MixOptions quieter; quieter.levelDb = -8.0f;
-    const auto fq = measure (makeMix (quieter), quieter.sr, 0, &m);
-    d = de.analyze (fq, m, ref);
-    std::cout << "  vs reference:"; for (auto& x : d) std::cout << " [" << x.title << "]"; std::cout << "\n";
-    CHECK (DiagnosisEngine::has (d, DiagnosisType::TooQuiet), "reference loudness gap not flagged");
-}
-
-static void testIntent()
-{
-    std::cout << "Intent parser (EN/FR)\n";
-    struct Case { const char* text; std::function<bool (const IntentVector&)> ok; };
-    const Case cases[] = {
-        { "Make my drop hit harder",              [] (const IntentVector& v) { return v.punch > 0.5f && v.impact > 0.3f; } },
-        { "plus large mais pas plus fort",        [] (const IntentVector& v) { return v.width > 0.5f && v.loudness < -0.5f; } },
-        { "Je veux que ça tape plus fort",        [] (const IntentVector& v) { return v.punch > 0.5f; } },
-        { "trop de basses",                       [] (const IntentVector& v) { return v.bass < -0.5f; } },
-        { "pas assez de basses",                  [] (const IntentVector& v) { return v.bass > 0.5f; } },
-        { "too much bass, needs more air",        [] (const IntentVector& v) { return v.bass < -0.5f && v.brightness > 0.5f; } },
-        { "it sounds dull and squashed",          [] (const IntentVector& v) { return v.brightness > 0.5f && v.dynamics > 0.5f; } },
-        { "wider without getting louder",         [] (const IntentVector& v) { return v.width > 0.5f && v.loudness < 0.0f; } },
-        { "plus chaud, moins agressif",           [] (const IntentVector& v) { return v.warmth > 0.5f; } },
-        { "make it massive",                      [] (const IntentVector& v) { return v.energy > 0.5f; } },
-        { "le mix est trop étroit, je veux de l'espace", [] (const IntentVector& v) { return v.width > 0.0f; } },
-    };
-    for (auto& c : cases)
+    float truePeakDb (const juce::AudioBuffer<float>& b)
     {
-        const auto r = IntentParser::parse (juce::CharPointer_UTF8 (c.text));
-        std::cout << "  \"" << c.text << "\" -> " << r.understood.joinIntoString (" ") << "\n";
-        CHECK (c.ok (r.intent), juce::String ("intent misread: ") + juce::String (juce::CharPointer_UTF8 (c.text)));
+        juce::dsp::Oversampling<float> os (2, 3, juce::dsp::Oversampling<float>::filterHalfBandFIREquiripple, true);
+        os.initProcessing ((size_t) b.getNumSamples());
+        juce::AudioBuffer<float> copy (b);
+        juce::dsp::AudioBlock<float> blk (copy);
+        auto up = os.processSamplesUp (blk);
+        float pk = 0;
+        for (size_t c = 0; c < up.getNumChannels(); ++c)
+            for (size_t i = 0; i < up.getNumSamples(); ++i) pk = std::max (pk, std::abs (up.getSample ((int) c, (int) i)));
+        return dbOf (pk);
     }
-}
 
-struct TestPlayHead : juce::AudioPlayHead
-{
-    double time = 0.0;
-    bool playing = true;
-    double bpm = 0.0;     // > 0: also report tempo and musical position
-    juce::Optional<PositionInfo> getPosition() const override
+    void setParam (WhaleAudioProcessor& p, const char* id, float v)
     {
-        PositionInfo info;
-        info.setTimeInSeconds (time);
-        info.setIsPlaying (playing);
-        if (bpm > 0.0) { info.setBpm (bpm); info.setPpqPosition (time * bpm / 60.0); }
-        return info;
+        auto* prm = p.state.getParameter (id);
+        prm->setValueNotifyingHost (prm->convertTo0to1 (v));
     }
-};
 
-// Feeds audio as if the DAW were playing it from song position startTime.
-static void feedTimed (FINISHAudioProcessor& p, TestPlayHead& ph, const juce::AudioBuffer<float>& src, double sr,
-                       double startTime, int block, bool pump, juce::AudioBuffer<float>* out = nullptr)
-{
-    juce::MidiBuffer midi;
-    juce::AudioBuffer<float> buf (2, block);
-    if (out != nullptr) out->setSize (2, src.getNumSamples());
-    for (int pos = 0; pos < src.getNumSamples(); pos += block)
+    // Run the processor on the mix generator for `seconds`, pumping the message-thread logic.
+    void run (WhaleAudioProcessor& p, MixGen& gen, double seconds, juce::AudioBuffer<float>* capture = nullptr, WhaleEditor* ed = nullptr)
     {
-        const int len = std::min (block, src.getNumSamples() - pos);
-        buf.setSize (2, len, false, false, true);
-        for (int ch = 0; ch < 2; ++ch) buf.copyFrom (ch, 0, src, ch, pos, len);
-        ph.time = startTime + pos / sr;
-        p.processBlock (buf, midi);
-        if (out != nullptr) for (int ch = 0; ch < 2; ++ch) out->copyFrom (ch, pos, buf, ch, 0, len);
-        if (pump && (pos / block) % 400 == 0)
-            juce::MessageManager::getInstance()->runDispatchLoopUntil (5);
-    }
-    if (pump) juce::MessageManager::getInstance()->runDispatchLoopUntil (100);
-}
-
-static void feed (FINISHAudioProcessor& p, const juce::AudioBuffer<float>& src, int block, bool pump)
-{
-    juce::MidiBuffer midi;
-    juce::AudioBuffer<float> buf (2, block);
-    for (int pos = 0; pos < src.getNumSamples(); pos += block)
-    {
-        const int len = std::min (block, src.getNumSamples() - pos);
-        buf.setSize (2, len, false, false, true);
-        for (int ch = 0; ch < 2; ++ch) buf.copyFrom (ch, 0, src, ch, pos, len);
-        p.processBlock (buf, midi);
-        if (pump && (pos / block) % 400 == 0)
-            juce::MessageManager::getInstance()->runDispatchLoopUntil (5);
-    }
-    if (pump) juce::MessageManager::getInstance()->runDispatchLoopUntil (100);
-}
-
-static void testProcessorAndState()
-{
-    std::cout << "Processor: analysis workflow, odd block sizes, mono, state round-trip\n";
-    MixOptions o; o.levelDb = -10.0f; o.seconds = 150;
-    const auto mix = makeMix (o);
-
-    FINISHAudioProcessor p;
-    p.prepareToPlay (o.sr, 512);
-    p.toggleAnalysis();
-    feed (p, mix, 512, true);
-    p.toggleAnalysis();
-    CHECK (p.getAnalysisState() == FINISHAudioProcessor::AnalysisState::Ready, "analysis did not complete");
-    CHECK (std::abs (p.getFeatures().durationSec - 150.0f) < 2.0f, "analysis lost audio frames");
-    std::cout << "  analysed " << p.getFeatures().durationSec << " s, score " << p.getScore() << "\n";
-
-    p.setIntent ("make the drop hit harder but not louder");
-    std::cout << "  intent notes: " << p.getDecision().notes.joinIntoString (" | ") << "\n";
-    p.applyProposal (0);
-    const auto applied = p.getCurrentMacros();
-    CHECK (p.getAppliedStrategy().isNotEmpty(), "proposal not applied");
-
-    // Odd block sizes through the full processor
-    {
-        juce::AudioBuffer<float> chunk (2, 48000);
-        for (int ch = 0; ch < 2; ++ch) chunk.copyFrom (ch, 0, mix, ch, 48000 * 40, 48000);
+        juce::AudioBuffer<float> buf (2, block);
         juce::MidiBuffer midi;
-        int pos = 0;
-        for (int bs : { 1, 7, 64, 333, 1024, 4096, 13, 2048 })
+        double acc = 0;
+        const int n = (int) (seconds * sr / block);
+        for (int k = 0; k < n; ++k)
         {
-            if (pos + bs > chunk.getNumSamples()) break;
-            juce::AudioBuffer<float> view (chunk.getArrayOfWritePointers(), 2, pos, bs);
-            p.processBlock (view, midi);
-            pos += bs;
+            gen.fill (buf);
+            p.processBlock (buf, midi);
+            if (capture != nullptr && k * block + block <= capture->getNumSamples())
+                for (int c = 0; c < 2; ++c) capture->copyFrom (c, k * block, buf, c, 0, block);
+            acc += block / sr;
+            if (acc >= 1.0 / 30.0) { acc = 0; TestAccess::pump (p); if (ed != nullptr) TestAccess::tickEditor (*ed); }
         }
-        CHECK (allFinite (chunk), "odd block sizes produced NaN");
     }
 
-    // Mono layout
+    // ------------------------------------------------------------------------------------------- tests
+
+    void testTransparency()
     {
-        FINISHAudioProcessor m;
-        auto layout = m.getBusesLayout();
-        layout.inputBuses.getReference (0) = juce::AudioChannelSet::mono();
-        layout.outputBuses.getReference (0) = juce::AudioChannelSet::mono();
-        CHECK (m.setBusesLayout (layout), "mono layout rejected");
-        m.prepareToPlay (44100, 256);
-        juce::AudioBuffer<float> mono (1, 256);
-        juce::MidiBuffer midi;
+        std::cout << "DSP neutral = transparent (apart from the latency)\n";
+        WhaleDSP d;
+        d.prepare (sr, block, 2);
+        WhaleDSP::Settings s;   // neutral
+        const int lat = d.getLatencySamples();
+        juce::AudioBuffer<float> b (2, block);
+        std::vector<float> in, out;
         for (int k = 0; k < 200; ++k)
         {
-            for (int i = 0; i < 256; ++i) mono.setSample (0, i, 0.5f * (float) std::sin (0.05 * (k * 256 + i)));
-            m.processBlock (mono, midi);
+            for (int i = 0; i < block; ++i)
+            {
+                const float v = 0.25f * (float) std::sin (2 * juce::MathConstants<double>::pi * 1000.0 * (k * block + i) / sr);
+                b.setSample (0, i, v); b.setSample (1, i, v * 0.7f);
+                in.push_back (v);
+            }
+            d.process (b, s);
+            for (int i = 0; i < block; ++i) out.push_back (b.getSample (0, i));
         }
-        CHECK (allFinite (mono), "mono processing produced NaN");
+        double err = 0, ref = 0;
+        for (size_t i = 20000; i < in.size(); ++i) { const double e = out[i] - in[i - (size_t) lat]; err += e * e; ref += (double) in[i] * in[i]; }
+        const double snr = 10.0 * std::log10 (ref / std::max (err, 1.0e-20));
+        std::cout << "    latency " << lat << " samples, null depth " << snr << " dB\n";
+        CHECK (lat > 60 && lat < 200, "latency reported (oversampling + look-ahead)");
+        CHECK (snr > 50.0, "neutral chain nulls against the delayed input (> 50 dB)");
     }
 
-    // State round-trip
-    juce::MemoryBlock state;
-    p.getStateInformation (state);
-    FINISHAudioProcessor q;
-    q.setStateInformation (state.getData(), (int) state.getSize());
-    const auto restored = q.getCurrentMacros();
-    CHECK (std::abs (restored.punch - applied.punch) < 1e-4f && std::abs (restored.width - applied.width) < 1e-4f
-           && std::abs (restored.loudness - applied.loudness) < 1e-4f, "parameters not restored");
-    CHECK (q.getFeatures().valid && q.getMusic().sections.size() == p.getMusic().sections.size(), "analysis not restored");
-    CHECK (q.getIntentText() == p.getIntentText(), "intent not restored");
-    CHECK (q.getScore() == p.getScore(), "score differs after restore");
-}
-
-
-static juce::AudioBuffer<float> slice (const juce::AudioBuffer<float>& b, double sr, double from, double to)
-{
-    const int a = (int) (from * sr), n = (int) ((to - from) * sr);
-    juce::AudioBuffer<float> out (2, n);
-    for (int ch = 0; ch < 2; ++ch) out.copyFrom (ch, 0, b, ch, a, n);
-    return out;
-}
-
-static float maxDiff (const juce::AudioBuffer<float>& a, const juce::AudioBuffer<float>& b)
-{
-    float d = 0;
-    for (int ch = 0; ch < 2; ++ch)
-        for (int i = 0; i < std::min (a.getNumSamples(), b.getNumSamples()); ++i)
-            d = std::max (d, std::abs (a.getSample (ch, i) - b.getSample (ch, i)));
-    return d;
-}
-
-static void printTrack (const TrackEngine& t)
-{
-    const auto& m = t.getMusic();
-    std::cout << "    map " << m.startTime << " .. " << m.endTime() << " s\n";
-    for (size_t i = 0; i < m.sections.size(); ++i)
+    void testCeiling()
     {
-        const auto& s = m.sections[i];
-        const auto& v = t.getVerdicts()[i];
-        std::cout << "    [" << s.label << " " << (int) s.startTime << "-" << (int) s.endTime << " conf " << s.confidence
-                  << (s.isUncertain() ? " ?" + sectionTypeName (s.alternative) : juce::String()) << "] "
-                  << v.headline << " (potential " << v.potential << ")";
-        if (v.transitionRef >= 0) std::cout << " -> transition " << v.transitionRef;
-        std::cout << "\n       variants:";
-        for (auto& x : *t.variantsFor (TrackEngine::Selection::section ((int) i)))
-            std::cout << " " << x.letter << ":" << x.name << (x.recommended ? "*" : "") << (x.refused ? "(declined)" : "") << " " << x.score;
-        std::cout << "\n";
+        std::cout << "True-peak ceiling under +18 dB drive with the clipper\n";
+        WhaleDSP d;
+        d.prepare (sr, block, 2);
+        WhaleDSP::Settings s;
+        s.driveDb = 18.0f; s.clip = 0.6f; s.satDrive = 0.3f; s.glue = 0.5f; s.ceilingDb = -1.0f;
+        MixGen gen; gen.gainDb = -6.0f;
+        juce::AudioBuffer<float> all (2, (int) (8 * sr)), b (2, block);
+        for (int k = 0; k * block + block <= all.getNumSamples(); ++k)
+        {
+            gen.fill (b);
+            d.process (b, s);
+            for (int c = 0; c < 2; ++c) all.copyFrom (c, k * block, b, c, 0, block);
+        }
+        const float tp = truePeakDb (all);
+        std::cout << "    true peak " << tp << " dBTP\n";
+        CHECK (tp <= -0.9f, "output true peak <= ceiling (+0.1 dB tolerance)");
+        bool finite = true;
+        for (int c = 0; c < 2; ++c) for (int i = 0; i < all.getNumSamples(); ++i) finite &= std::isfinite (all.getSample (c, i));
+        CHECK (finite, "no NaN / inf");
     }
-    for (auto& tr : t.getTransitions())
+
+    void testLoudnessLoopAndAB()
     {
-        std::cout << "    <" << tr.title << "> " << (tr.works ? "WORKS " : "IMPROVE ") << tr.headline << " (" << tr.contrastDb << " dB)\n       variants:";
-        for (auto& x : tr.variants) std::cout << " " << x.letter << ":" << x.name << (x.recommended ? "*" : "") << " " << x.score;
-        std::cout << "\n";
+        std::cout << "Processor: loudness target (Club -8) is reached, A/B is level-matched\n";
+        WhaleAudioProcessor p;
+        p.prepareToPlay (sr, block);
+        p.applyPreset (0);                 // Club Punch (clipper + glue: the limiter does not do all the work)
+        setParam (p, PID::target, 3.0f);   // Club -8 -> loud passages at -7
+        MixGen gen; gen.gainDb = -20.0f;
+        run (p, gen, 40.0);
+        const float out = p.getDSP().getOutputLoudness();
+        std::cout << "    output short-term " << out << " LUFS (target " << p.getEffectiveTarget() << ")\n";
+        CHECK (std::abs (out - p.getEffectiveTarget()) < 1.0f, "closed loop holds the target within 1 dB");
+        setParam (p, PID::bypass, 1.0f);
+        run (p, gen, 6.0);
+        const float byp = p.getDSP().getOutputLoudness();
+        std::cout << "    bypass (SANS) loudness " << byp << " LUFS\n";
+        CHECK (std::abs (byp - out) < 1.0f, "SANS is played at the same loudness as AVEC");
     }
-}
 
-static void analyseTimed (FINISHAudioProcessor& p, TestPlayHead& ph, const juce::AudioBuffer<float>& mix, double sr, double songStart)
-{
-    p.prepareToPlay (sr, 512);
-    p.setPlayHead (&ph);
-    p.toggleAnalysis();
-    feedTimed (p, ph, mix, sr, songStart, 512, true);
-    ph.playing = false;
-    // Transport stopped: FINISH finishes the analysis on its own.
-    feedTimed (p, ph, slice (mix, sr, 0, 0.5), sr, songStart, 512, true);
-    ph.playing = true;
-}
-
-juce::AudioBuffer<float> renderReferenceDropForTests (double sr, double& bpm);
-
-// A "mix" with known problems: pink-ish noise + a strong 300 Hz build-up + harsh 3 kHz, bass in stereo.
-static juce::AudioBuffer<float> makeProblemMix (double sr, double seconds, float gain)
-{
-    juce::AudioBuffer<float> b (2, (int) (sr * seconds));
-    juce::Random rnd (7);
-    Biquad mud, harsh, tilt, tilt2, lowSide;
-    mud.setPeak (sr, 300.0, 0.9, 16.0);
-    harsh.setPeak (sr, 3200.0, 1.0, 7.0);
-    tilt.setLowShelf (sr, 200.0, 9.0);
-    tilt2.setHighShelf (sr, 6000.0, -6.0);
-    lowSide.setLowPass (sr, 100.0, 0.7071);
-    float b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, b5 = 0, b6 = 0;   // Kellet pink noise
-    for (int i = 0; i < b.getNumSamples(); ++i)
+    void testAutoProfiles()
     {
-        const float w = rnd.nextFloat() * 2.0f - 1.0f;
-        b0 = 0.99886f * b0 + w * 0.0555179f; b1 = 0.99332f * b1 + w * 0.0750759f; b2 = 0.96900f * b2 + w * 0.1538520f;
-        b3 = 0.86650f * b3 + w * 0.3104856f; b4 = 0.55000f * b4 + w * 0.5329522f; b5 = -0.7616f * b5 - w * 0.0168980f;
-        const float n = (b0 + b1 + b2 + b3 + b4 + b5 + b6 + w * 0.5362f) * 0.2f;
-        b6 = w * 0.115926f;
-        const float x = tilt2.process (tilt.process (harsh.process (mud.process (n, 0), 0), 0), 0) * gain;
-        // kick-like thump every half second for transients
-        const double t = (double) i / sr;
-        const double ph = std::fmod (t, 0.5);
-        const float kick = (float) (std::sin (2.0 * juce::MathConstants<double>::pi * 55.0 * ph) * std::exp (-ph * 18.0)) * gain * 3.0f;
-        const float side = lowSide.process (rnd.nextFloat() * 2.0f - 1.0f, 1) * gain * 12.0f;
-        b.setSample (0, i, x + kick + side);
-        b.setSample (1, i, x + kick - side);
-    }
-    return b;
-}
-
-static void testMasterDoctor()
-{
-    std::cout << "Mastering from the mix's problems\n";
-    // Pure logic
-    {
+        std::cout << "AUTO against the reference profiles\n";
+        // A mix that already sits on the Tech House medians should get (almost) no EQ moves.
+        const auto& p = AutoMaster::profile (styleTechHouse);
         AudioFeatures f;
-        f.valid = true; f.durationSec = 60; f.integratedLufs = -9.5f; f.loudnessRange = 6; f.peakDb = -0.5f; f.plr = 9.0f;
-        f.lowRatio = 0.55f; f.highRatio = 0.05f; f.sideRatio = 0.12f; f.lowSideRatio = 0.05f; f.correlation = 0.7f; f.punchIndex = 7.0f;
-        f.subRatio = 0.2f; f.lowMidRatio = 0.32f; f.presenceRatio = 0.10f; f.monoLossDb = 2.0f; f.lowSideRatio = 0.02f;
-        MasterDoctor::Request r; r.in = f; r.bpm = 126.0; r.targetIndex = sameLevelTarget; r.intensity = 1.0f;
-        auto plan = MasterDoctor::design (r);
-        CHECK (plan.valid && plan.findings.empty(), "a balanced mix: nothing to fix (" + juce::String ((int) plan.findings.size()) + ")");
-        CHECK (std::abs (plan.eqLowDb) + std::abs (plan.eqHighDb) + std::abs (plan.eqMudDb) + std::abs (plan.eqPresDb) + std::abs (plan.sideDb) < 1.0e-6f, "no EQ on a balanced mix");
-        CHECK (plan.recommendedTarget == sameLevelTarget, "a mix already at -9.5 LUFS is not made louder");
-        f.lowMidRatio = 0.60f; f.highRatio = 0.006f;
-        r.in = f;
-        plan = MasterDoctor::design (r);
-        CHECK (plan.eqMudDb < -0.5f, "mud is cut");
-        CHECK (plan.eqHighDb > 0.4f, "dull top is opened");
-        r.keepDark = true;
-        plan = MasterDoctor::design (r);
-        CHECK (plan.eqHighDb <= 0.0f && plan.eqPresDb <= 0.0f, "keep dark: no added highs");
-        r.keepDark = false; r.intensity = 0.0f;
-        plan = MasterDoctor::design (r);
-        CHECK (std::abs (plan.eqMudDb) < 1.0e-6f, "intensity 0 = no correction");
-        f.integratedLufs = -19.0f; r.in = f; r.intensity = 0.7f;
-        plan = MasterDoctor::design (r);
-        CHECK (plan.recommendedTarget == 2, "a quiet club mix is brought to -11 LUFS, not further");
-        f.monoLossDb = 6.0f; f.correlation = 0.05f; r.in = f;
-        plan = MasterDoctor::design (r);
-        CHECK (plan.sideDb < -0.5f, "phase problems: the sides are reduced");
-        f.plr = 6.0f; f.loudnessRange = 2.0f; f.integratedLufs = -16.0f; r.in = f;
-        plan = MasterDoctor::design (r);
-        CHECK (plan.recommendedTarget == sameLevelTarget && plan.clip < 0.05f, "squashed mix: no push, almost no clipping");
+        f.valid = true; f.integratedLufs = -16; f.plr = 13; f.lowRatio = p.lowRatio.median; f.subRatio = p.subRatio.median; f.lowMidRatio = p.lowMidRatio.median;
+        f.presenceRatio = p.presenceRatio.median; f.highRatio = p.highRatio.median; f.sideRatio = p.sideRatio.median; f.correlation = 0.9f; f.monoLossDb = 3.1f;
+        auto r = AutoMaster::compute (f, styleTechHouse, 126.0, styleTarget, -1.0f);
+        float moves = std::abs (r.base.toneLow) + std::abs (r.base.toneAir);
+        for (int b = 0; b < 4; ++b) moves += std::abs (r.base.specGain[b]);
+        CHECK (r.valid && moves < 0.01f, "a mix inside the corridor gets no EQ moves");
+        CHECK (std::abs (r.loudPassageTarget - p.st_drop.median) < 0.01f, "style target = loud-passage median of the references");
+        CHECK (r.base.widthMono > 100.0f, "club style: bass kept mono");
+
+        // Muddy + harsh mix
+        auto g = f;
+        g.lowMidRatio = p.lowMidRatio.max * 1.6f; g.presenceRatio = p.presenceRatio.max * 1.8f;
+        r = AutoMaster::compute (g, styleTechHouse, 126.0, styleTarget, -1.0f);
+        CHECK (r.base.specGain[1] < -0.5f, "muddy mix: low-mid cut");
+        CHECK (r.base.specGain[2] < -0.5f && r.base.specDyn[2] > 0.4f, "harsh mix: dynamic presence cut");
+        for (auto& l : r.report) std::cout << "      > " << l << "\n";
+
+        // Style detection by tempo
+        CHECK (AutoMaster::detectStyle (f, 174.0) == styleDnb, "174 BPM -> Drum & Bass");
+        CHECK (AutoMaster::detectStyle (f, 155.0) == styleHardTechno, "155 BPM -> Hard Techno");
+        CHECK (AutoMaster::detectStyle (f, 85.0) == styleLofi, "85 BPM -> Lo-fi");
+        CHECK (AutoMaster::detectStyle (f, 126.0) == styleTechHouse || AutoMaster::detectStyle (f, 126.0) == styleAfro, "126 BPM -> house family");
+        // Lo-fi: never squashed
+        auto lf = AutoMaster::compute (f, styleLofi, 85.0, styleTarget, -1.0f);
+        CHECK (lf.base.clipAmt < 0.01f && lf.base.compGlue < 0.3f && lf.loudPassageTarget < -10.0f, "lo-fi: soft target, no clipper");
     }
-    // Debug: which stage changes the balance
-    if (juce::SystemStats::getEnvironmentVariable ("FINISH_DEBUG_MASTER", {}).isNotEmpty())
+
+    void testAutoEndToEnd()
     {
-        const double sr = 48000.0;
-        const auto mix = makeProblemMix (sr, 20.0, 0.05f);
-        auto measure = [&] (const juce::AudioBuffer<float>& b)
+        std::cout << "AUTO end to end on a synthetic mix (stereo bass)\n";
+        WhaleAudioProcessor p;
+        p.prepareToPlay (sr, block);
+        MixGen gen; gen.gainDb = -18.0f; gen.stereoBass = true;
+        setParam (p, PID::style, (float) styleTechHouse);   // (synthetic loop: style detection is tested on real tracks)
+        run (p, gen, 3.0);
+        p.toggleAuto();
+        run (p, gen, 14.0);
+        CHECK (p.getAutoState() == WhaleAudioProcessor::AutoState::verifying, "after 12 s of audio AUTO has applied and verifies");
+        run (p, gen, 8.0);
+        CHECK (p.getAutoState() == WhaleAudioProcessor::AutoState::done, "verification finished");
+        const auto& r = p.getAutoResult();
+        CHECK (r.valid && r.report.size() >= 3, "report written");
+        for (auto& l : r.report) std::cout << "      > " << l << "\n";
+        CHECK (p.state.getRawParameterValue (PID::widthMono)->load() >= 100.0f, "stereo bass -> mono bass enabled");
+        run (p, gen, 15.0);
+        std::cout << "    verdict: " << p.getVerdictText() << ", loudness error " << p.getLoudnessError() << " dB\n";
+        CHECK (p.getVerdict() == WhaleAudioProcessor::Verdict::validated, "master validated (on target, no problem)");
+        CHECK (p.getSouffleCount() == 1, "le souffle triggered exactly once");
+    }
+
+    void testPresetsAndState()
+    {
+        std::cout << "Presets and project state\n";
+        WhaleAudioProcessor p;
+        p.prepareToPlay (sr, block);
+        CHECK (p.presets.getAll().size() >= 20, "factory presets available (" + std::to_string (p.presets.getAll().size()) + ")");
+        int perStyle[numStyles] {};
+        for (auto& pr : p.presets.getAll()) perStyle[pr.style]++;
+        bool all = true;
+        for (int s = 1; s < numStyles; ++s) all &= perStyle[s] >= 3;
+        CHECK (all, "at least 3 presets per style");
+        p.applyPreset (0);
+        const float glue = p.state.getRawParameterValue (PID::compGlue)->load();
+        CHECK (std::abs (glue - p.presets.getAll()[0].base.compGlue) < 0.01f, "preset applied to the modules");
+        setParam (p, PID::mAir, 0.8f);
+        juce::MemoryBlock mb;
+        p.getStateInformation (mb);
+        WhaleAudioProcessor q;
+        q.setStateInformation (mb.getData(), (int) mb.getSize());
+        CHECK (std::abs (q.state.getRawParameterValue (PID::mAir)->load() - 0.8f) < 0.01f, "macros restored with the project");
+        CHECK (q.presets.getCurrentName() == p.presets.getCurrentName(), "current preset name restored");
+    }
+
+    // ------------------------------------------------------------------------------------------- snapshots
+
+    struct FileSource
+    {
+        std::unique_ptr<juce::AudioFormatReader> reader;
+        juce::int64 pos = 0;
+        bool load (const juce::File& f, double startSec)
         {
-            AudioAnalyzer an; an.setPublishSamples (false); an.prepare (sr);
-            AnalysisSession ses; std::vector<AnalysisFrame> tmp (512);
-            for (int pos = 0; pos < b.getNumSamples(); pos += 4096)
+            juce::AudioFormatManager fm; fm.registerBasicFormats();
+            reader.reset (fm.createReaderFor (f));
+            if (reader == nullptr) return false;
+            pos = (juce::int64) (startSec * reader->sampleRate);
+            return true;
+        }
+    };
+
+    void snapshot (WhaleEditor& ed, const juce::File& file)
+    {
+        auto& c = TestAccess::content (ed);
+        auto img = c.createComponentSnapshot (c.getLocalBounds(), true, 1.0f);
+        juce::PNGImageFormat png;
+        file.deleteFile();
+        juce::FileOutputStream os (file);
+        png.writeImageToStream (img, os);
+        std::cout << "  wrote " << file.getFullPathName() << "\n";
+    }
+
+    void runSnapshots (const juce::File& dir, const juce::String& wav)
+    {
+        dir.createDirectory();
+        WhaleAudioProcessor p;
+        p.prepareToPlay (sr, block);
+        std::unique_ptr<WhaleEditor> ed (dynamic_cast<WhaleEditor*> (p.createEditor()));
+        FileSource src;
+        bool haveFile = wav.isNotEmpty() && src.load (juce::File (wav), 60.0);
+        MixGen gen; gen.gainDb = -16.0f;
+        juce::AudioBuffer<float> buf (2, block);
+        juce::MidiBuffer midi;
+        double acc = 0;
+        auto play = [&] (double seconds, float gainDb = 0.0f)
+        {
+            for (int k = 0; k < (int) (seconds * sr / block); ++k)
             {
-                const int len = std::min (4096, b.getNumSamples() - pos);
-                an.process (b.getReadPointer (0, pos), b.getReadPointer (1, pos), len, pos / sr);
-                for (int got; (got = an.readFrames (tmp.data(), 512)) > 0;) for (int i = 0; i < got; ++i) ses.add (tmp[(size_t) i]);
+                if (haveFile && src.reader != nullptr) { src.reader->read (&buf, 0, block, src.pos, true, true); src.pos += block; buf.applyGain (juce::Decibels::decibelsToGain (gainDb - 6.0f)); }
+                else gen.fill (buf);
+                p.processBlock (buf, midi);
+                acc += block / sr;
+                if (acc >= 1.0 / 60.0) { acc = 0; TestAccess::pump (p); TestAccess::tickEditor (*ed); }
             }
-            return ses.computeFeatures();
         };
-        auto run = [&] (const char* name, std::function<void (FinishDSP::Settings&)> set)
+        play (6.0);
+        snapshot (*ed, dir.getChildFile ("whale_1_ready.png"));
+        p.toggleAuto();
+        play (7.0);
+        snapshot (*ed, dir.getChildFile ("whale_2_auto_listening.png"));
+        play (8.0);
+        play (6.0);
+        snapshot (*ed, dir.getChildFile ("whale_3_validated_souffle.png"));
+        play (8.0);
+        TestAccess::openExpert (*ed, 0); play (1.0);
+        snapshot (*ed, dir.getChildFile ("whale_4_expert_spectral.png"));
+        TestAccess::openExpert (*ed, 7); play (0.5);
+        snapshot (*ed, dir.getChildFile ("whale_5_rapport_auto.png"));
+        TestAccess::openExpert (*ed, -1);
+        TestAccess::showBrowser (*ed); play (0.5);
+        snapshot (*ed, dir.getChildFile ("whale_6_presets.png"));
+        // too loud: manual gain far above the style target
+        TestAccess::hideBrowser (*ed);
+        setParam (p, PID::target, (float) manualTarget);
+        setParam (p, PID::manualDrive, 9.0f);
+        play (6.0);
+        snapshot (*ed, dir.getChildFile ("whale_7_trop_fort.png"));
+        setParam (p, PID::target, (float) styleTarget);
+        setParam (p, PID::manualDrive, 0.0f);
+        // phase problem: polarity-inverted right channel (synthetic source)
+        gen.invertR = true;
+        const bool hadFile = haveFile;
+        haveFile = false; juce::ignoreUnused (hadFile);
+        play (6.0);
+        snapshot (*ed, dir.getChildFile ("whale_8_phase.png"));
+    }
+
+    void renderFile (const juce::File& in, const juce::File& out, int style)
+    {
+        juce::AudioFormatManager fm; fm.registerBasicFormats();
+        std::unique_ptr<juce::AudioFormatReader> r (fm.createReaderFor (in));
+        if (r == nullptr) { std::cout << "cannot read " << in.getFullPathName() << "\n"; ++failures; return; }
+        WhaleAudioProcessor p;
+        p.setRateAndBufferSizeDetails (r->sampleRate, block);
+        p.prepareToPlay (r->sampleRate, block);
+        setParam (p, PID::style, (float) style);
+        const juce::int64 len = r->lengthInSamples;
+        juce::AudioBuffer<float> buf (2, block);
+        juce::MidiBuffer midi;
+        // pass 1: listen from the loudest region (middle of the track) and let AUTO apply
+        p.toggleAuto();
+        juce::int64 pos = len / 3;
+        double acc = 0;
+        while (p.getAutoState() != WhaleAudioProcessor::AutoState::done && pos < len)
         {
-            FinishDSP d; d.prepare (sr, 512, 2);
-            juce::AudioBuffer<float> b (mix);
-            FinishDSP::Settings st; set (st);
-            for (int pos = 0; pos < b.getNumSamples(); pos += 512)
-            {
-                juce::AudioBuffer<float> blk (b.getArrayOfWritePointers(), 2, pos, std::min (512, b.getNumSamples() - pos));
-                d.process (blk, st);
-            }
-            const auto f = measure (b);
-            std::cout << "  " << juce::String (name).paddedRight (' ', 14) << " lowmid " << f.lowMidRatio << " pres " << f.presenceRatio << " high " << f.highRatio << " low " << f.lowRatio << " lufs " << f.integratedLufs << " lowSide " << f.lowSideRatio << " side " << f.sideRatio << "\n";
-        };
-        const auto f0 = measure (mix);
-        std::cout << "  input          lowmid " << f0.lowMidRatio << " pres " << f0.presenceRatio << " high " << f0.highRatio << " low " << f0.lowRatio << "\n";
-        run ("neutral", [] (auto&) {});
-        run ("mud -1.2", [] (auto& s) { s.eqMudDb = -1.2f; });
-        run ("drive 13", [] (auto& s) { s.driveDb = 13.0f; });
-        run ("glue .5", [] (auto& s) { s.glue = 0.5f; });
-        run ("glue+drive", [] (auto& s) { s.glue = 0.5f; s.driveDb = 13.0f; });
-        run ("clip .4+drive", [] (auto& s) { s.clip = 0.4f; s.driveDb = 13.0f; });
-        run ("mono", [] (auto& s) { s.monoBass = 1.0f; });
-        run ("side -3", [] (auto& s) { s.sideDb = -3.0f; });
-    }
-    // Through the plugin: measure, correct, measure again (same passage), loudness kept.
-    {
-        const double sr = 48000.0;
-        FINISHAudioProcessor p;
-        p.setPlayConfigDetails (2, 2, sr, 512);
-        p.prepareToPlay (sr, 512);
-        TestPlayHead ph; ph.bpm = 126.0;
-        p.setPlayHead (&ph);
-        const auto mix = makeProblemMix (sr, 30.0, 0.05f);
-        feedTimed (p, ph, mix, sr, 10.0, 512, true);
-        p.applyRecommendedTarget();
-        const auto& plan = p.getMasterPlan();
-        const auto in = p.getMasterInput();
-        std::cout << "  in: " << in.integratedLufs << " LUFS, low-mid " << in.lowMidRatio << ", presence " << in.presenceRatio << ", lowSide " << in.lowSideRatio
-                  << " -> mud " << plan.eqMudDb << " pres " << plan.eqPresDb << " low " << plan.eqLowDb << " high " << plan.eqHighDb << " mono " << plan.monoBass
-                  << " target " << plan.recommendedTarget << "\n";
-        CHECK (in.valid && plan.valid, "mix measured while playing");
-        CHECK (plan.eqMudDb < -0.5f, "plugin: mud detected and cut");
-        CHECK (plan.monoBass > 0.5f, "plugin: stereo bass detected");
-        // Play the same passage again with the corrections on (60 s window holds both passes; restart it)
-        FINISHAudioProcessor q;
-        q.setPlayConfigDetails (2, 2, sr, 512);
-        q.prepareToPlay (sr, 512);
-        q.setPlayHead (&ph);
-        feedTimed (q, ph, mix, sr, 10.0, 512, true);
-        q.applyRecommendedTarget();
-        feedTimed (q, ph, mix, sr, 40.0, 512, true);
-        juce::MessageManager::getInstance()->runDispatchLoopUntil (2200);
-        juce::AudioBuffer<float> outBuf;
-        feedTimed (q, ph, mix, sr, 70.0, 512, true, &outBuf);
-        juce::MessageManager::getInstance()->runDispatchLoopUntil (2200);
-        std::cout << "  debug: in peak " << juce::Decibels::gainToDecibels (mix.getMagnitude (0, mix.getNumSamples()))
-                  << " out peak " << juce::Decibels::gainToDecibels (outBuf.getMagnitude (0, outBuf.getNumSamples()))
-                  << " drive " << q.getAutoDriveDb() << " corr " << q.getDSP().getLoudnessCorrectionDb() << " tp meter " << q.getDSP().getTruePeakDb() << "\n";
-        const auto& qin = q.getMasterInput();
-        const auto& qout = q.getMasterOutput();
-        std::cout << "  out: " << qout.integratedLufs << " LUFS (in " << qin.integratedLufs << "), low-mid " << qout.lowMidRatio << " (in " << qin.lowMidRatio
-                  << "), lowSide " << qout.lowSideRatio << " (in " << qin.lowSideRatio << ")\n";
-        CHECK (qout.valid && qout.lowMidRatio < qin.lowMidRatio * 0.97f, "low-mid build-up reduced at the output");
-        CHECK (qout.lowSideRatio < qin.lowSideRatio * 0.5f, "bass made mono at the output");
-        if ((int) q.params.getRawParameterValue (ParamIDs::target)->load() == sameLevelTarget)
-            CHECK (std::abs (qout.integratedLufs - qin.integratedLufs) < 1.2f, "same level target keeps the loudness");
-        const auto rep = q.getMasterReport();
-        CHECK (rep.contains (utf8 ("AVANT -> APRÈS")), "report has a before / after table");
-        std::cout << rep << "\n";
-    }
-}
-
-static void testFinishEndToEnd()
-{
-    std::cout << "FINISH MY TRACK end to end: play a drop in the DAW, one click, arrangement + master + preview + export\n";
-    const double sr = 48000.0;
-    double bpm = 0;
-    const auto drop = renderReferenceDropForTests (sr, bpm);
-    FINISHAudioProcessor p;
-    p.setPlayConfigDetails (2, 2, sr, 512);
-    p.prepareToPlay (sr, 512);
-    TestPlayHead ph; ph.bpm = bpm;
-    p.setPlayHead (&ph);
-    const double start = 64.0 * 60.0 / bpm;   // the drop sits at bar 17 of the user's set
-    feedTimed (p, ph, drop, sr, start, 512, true);
-    ph.playing = false;
-    { juce::AudioBuffer<float> silence (2, 512); silence.clear(); juce::MidiBuffer mb; for (int i = 0; i < 20; ++i) p.processBlock (silence, mb); }
-    juce::MessageManager::getInstance()->runDispatchLoopUntil (100);
-
-    p.finishMyTrack();   // nothing was "listening": FINISH uses what was just played
-    for (int i = 0; i < 300 && ! p.getComposer().hasArrangement(); ++i) juce::MessageManager::getInstance()->runDispatchLoopUntil (20);
-    std::cout << "  status: " << p.getStatusMessage() << "\n";
-    CHECK (p.getComposer().hasArrangement(), "one click did not produce an arrangement");
-    if (! p.getComposer().hasArrangement()) return;
-    const auto& dna = p.getComposer().getDNA();
-    CHECK (dna.keyRoot == 9 && dna.minor, "end-to-end key should be A minor");
-    CHECK (std::abs (dna.bpm - bpm) < 0.01, "end-to-end tempo from host");
-    CHECK (p.getComposer().getUserBar() == 16, "drop position in the set should be bar 17, got " + juce::String (p.getComposer().getUserBar() + 1));
-    {
-        const int t = (int) p.params.getRawParameterValue (ParamIDs::target)->load();
-        CHECK (t > 0 && t == p.getMasterPlan().recommendedTarget, "master switched on with the target the analysis recommends (got " + juce::String (t) + ")");
-    }
-
-    // Preview: the generated intro is audible through the plugin, even with the transport stopped.
-    p.previewSection (0, true);
-    juce::AudioBuffer<float> buf (2, 512); juce::MidiBuffer mb;
-    float peak = 0;
-    for (int i = 0; i < 400; ++i) { buf.clear(); p.processBlock (buf, mb); peak = std::max (peak, buf.getMagnitude (0, 512)); }
-    p.stopPreview();
-    std::cout << "  preview peak " << peak << "\n";
-    CHECK (peak > 0.05f && peak <= 1.0f, "preview silent or over full scale");
-
-    // Commands go to the composer.
-    const auto sections = p.getComposer().getArrangement().sections.size();
-    p.setIntent (juce::String (juce::CharPointer_UTF8 (u8"crée un bridge mélodique sombre")));
-    CHECK (p.getComposer().getArrangement().sections.size() == sections + 1, "command did not add the bridge");
-
-    // Export + state.
-    const auto r = p.exportArrangement (false);
-    CHECK (r.ok && r.fullMidi.existsAsFile(), "export from the processor failed");
-    r.folder.deleteRecursively();
-    juce::MemoryBlock state;
-    p.getStateInformation (state);
-    FINISHAudioProcessor q;
-    q.setStateInformation (state.getData(), (int) state.getSize());
-    juce::MessageManager::getInstance()->runDispatchLoopUntil (50);
-    CHECK (q.getComposer().hasArrangement() && q.getComposer().getArrangement().sections.size() == sections + 1, "arrangement not restored from the session");
-}
-
-static void testTrackEngine()
-{
-    std::cout << "FINISH MY TRACK: track map, Section DNA, transitions, variants\n";
-    using Sel = TrackEngine::Selection;
-
-    // 1. Normal arrangement, analysed from song position 30 s (the DAW timeline, not "listening time").
-    {
-        MixOptions o; o.levelDb = -6.0f;
-        const auto mix = makeMix (o);
-        FINISHAudioProcessor p; TestPlayHead ph;
-        analyseTimed (p, ph, mix, o.sr, 30.0);
-        CHECK (p.getAnalysisState() == FINISHAudioProcessor::AnalysisState::Ready, "analysis did not auto-finish when the transport stopped");
-        const auto& t = p.getTrack();
-        printTrack (t);
-        const auto& S = t.getMusic().sections;
-        CHECK (std::abs (t.getMusic().startTime - 30.0) < 0.2, "track map is not aligned to the song position");
-        CHECK (S.size() == 6, "expected 6 sections");
-        CHECK (t.getTransitions().size() == S.size() - 1, "one transition per boundary");
-        if (S.size() == 6)
-        {
-            CHECK (S[2].type == SectionType::Drop && S[4].type == SectionType::Drop, "drops not found");
-            CHECK (std::abs (S[2].startTime - (30.0 + 0.25 * 150)) < 2.5, "DROP 1 start misplaced");
-            CHECK (t.getDNA()[4].role == SectionRole::NewPeak, "second drop should be a New peak");
-            // Identical drops: FINISH should say DROP 2 is already powerful and point at the transition before it.
-            CHECK (t.getVerdicts()[4].transitionRef == 3, "DROP 2 should recommend working the BREAK -> DROP 2 transition");
-            CHECK (t.getTransitions()[3].works, "BREAK -> DROP 2 has a clear lift and should be judged as working");
+            r->read (&buf, 0, block, pos, true, true); pos += block;
+            p.processBlock (buf, midi);
+            acc += block / r->sampleRate;
+            if (acc >= 1.0 / 30.0) { acc = 0; TestAccess::pump (p); }
         }
-        for (size_t i = 0; i < S.size(); ++i)
+        for (auto& l : p.getAutoResult().report) std::cout << "  > " << l << "\n";
+        for (auto& l : p.getAutoResult().mixNotes) std::cout << "  ! " << l << "\n";
+        // pass 2: render the whole file (latency compensated)
+        p.reset();
+        const int lat = p.getLatencySamples();
+        out.deleteFile();
+        juce::WavAudioFormat wavFmt;
+        std::unique_ptr<juce::AudioFormatWriter> w (wavFmt.createWriterFor (new juce::FileOutputStream (out), r->sampleRate, 2, 24, {}, 0));
+        juce::int64 written = 0;
+        pos = 0;
+        while (written < len)
         {
-            const auto* vs = t.variantsFor (Sel::section ((int) i));
-            CHECK (vs != nullptr && vs->size() == 3 && (*vs)[0].letter == 'A' && (*vs)[2].letter == 'C', "three variants A/B/C per section");
-            CHECK (S[i].confidence > 0.0f && S[i].confidence <= 1.0f, "confidence out of range");
+            r->read (&buf, 0, block, pos, true, true); pos += block;
+            p.processBlock (buf, midi);
+            acc += block / r->sampleRate;
+            if (acc >= 1.0 / 30.0) { acc = 0; TestAccess::pump (p); }
+            int start = 0;
+            if (pos - block < lat) start = (int) juce::jmin ((juce::int64) block, lat - (pos - block));
+            const int n = (int) juce::jmin ((juce::int64) (block - start), len - written);
+            if (n > 0) { w->writeFromAudioSampleBuffer (buf, start, n); written += n; }
         }
-
-        // 2. Apply DROP 1 · A Punch with Coherence 0: audio changes inside DROP 1 only.
-        if (auto* c = p.params.getParameter (ParamIDs::coherence)) c->setValueNotifyingHost (0.0f);
-        FINISHAudioProcessor ref; TestPlayHead refPh;
-        if (auto* c = ref.params.getParameter (ParamIDs::coherence)) c->setValueNotifyingHost (0.0f);
-        ref.prepareToPlay (o.sr, 512); ref.setPlayHead (&refPh);
-        p.prepareToPlay (o.sr, 512);
-        p.editTrack ([] (TrackEngine& e) { e.apply (Sel::section (2), 0, 1.0f); });
-        CHECK (p.getTrack().getEdits().size() == 1, "edit not stored");
-        const auto plan = p.getTrack().compilePlan();
-        CHECK (plan.count == 1 && plan.evaluate ((S[2].startTime + S[2].endTime) / 2, 0.0f).delta.punch > 0.4f, "plan has no punch inside DROP 1");
-        CHECK (std::abs (plan.evaluate (S[0].startTime + 5.0, 0.0f).delta.punch) < 1e-6f, "plan leaks outside DROP 1");
-
-        juce::AudioBuffer<float> outP, outR;
-        const auto part = slice (mix, o.sr, 0.0, 80.0);   // intro, build, most of drop 1
-        feedTimed (p, ph, part, o.sr, 30.0, 512, false, &outP);
-        feedTimed (ref, refPh, part, o.sr, 30.0, 512, false, &outR);
-        const float dIntro = maxDiff (slice (outP, o.sr, 2.0, 15.0), slice (outR, o.sr, 2.0, 15.0));
-        const float dDrop = maxDiff (slice (outP, o.sr, 45.0, 70.0), slice (outR, o.sr, 45.0, 70.0));
-        std::cout << "    section edit: diff in INTRO " << dIntro << ", diff in DROP 1 " << dDrop << "\n";
-        CHECK (dIntro < 1.0e-6f, "section edit changed audio outside its section");
-        CHECK (dDrop > 0.01f, "section edit had no effect inside its section");
-        CHECK (allFinite (outP), "NaN with a section plan");
-
-        // 3. Preview, Keep Original, Undo, Regenerate.
-        p.editTrack ([] (TrackEngine& e) { e.preview (Sel::section (0), 2); });
-        CHECK (p.getTrack().effectiveEdits().size() == 2, "preview not layered on top of the applied edits");
-        p.editTrack ([] (TrackEngine& e) { e.clearPreview(); });
-        CHECK (p.getTrack().effectiveEdits().size() == 1, "preview not cleared");
-
-        if (auto* pp = p.params.getParameter (ParamIDs::punch)) pp->setValueNotifyingHost (0.8f);   // global processing on
-        p.editTrack ([] (TrackEngine& e) { e.keepOriginal (Sel::section (0)); });
-        juce::AudioBuffer<float> outKeep;
-        feedTimed (p, ph, slice (mix, o.sr, 0.0, 16.0), o.sr, 30.0, 512, false, &outKeep);
-        const double lat = p.getLatencySamples() / o.sr;   // look-ahead limiter latency (reported to the host)
-        const float dKeep = maxDiff (slice (outKeep, o.sr, 3.0 + lat, 14.0 + lat), slice (mix, o.sr, 3.0, 14.0));
-        std::cout << "    keep original: max diff vs untouched audio " << dKeep << "\n";
-        CHECK (dKeep < 1.0e-5f, "Keep Original did not leave the section untouched");
-        if (auto* pp = p.params.getParameter (ParamIDs::punch)) pp->setValueNotifyingHost (0.0f);
-
-        const auto namesBefore = (*p.getTrack().variantsFor (Sel::section (3)))[0].name;
-        p.editTrack ([] (TrackEngine& e) { e.regenerate (Sel::section (3)); });
-        CHECK ((*p.getTrack().variantsFor (Sel::section (3)))[0].name != namesBefore, "Regenerate gave the same directions");
-
-        p.editTrack ([] (TrackEngine& e) { e.undo(); });
-        CHECK (p.getTrack().getEdits().size() == 1 && ! p.getTrack().getEdits()[0].keepOriginal, "Undo did not restore the previous edits");
-
-        // 4. Structure corrections.
-        p.editTrack ([] (TrackEngine& e) { e.setSectionType (3, SectionType::Bridge); });
-        CHECK (p.getTrack().getMusic().sections[3].label == "BRIDGE" && p.getTrack().getMusic().sections[3].confirmed, "relabel failed");
-        const double oldEnd = p.getTrack().getMusic().sections[1].endTime;
-        p.editTrack ([oldEnd] (TrackEngine& e) { e.moveBoundary (1, oldEnd - 2.0); });
-        CHECK (std::abs (p.getTrack().getMusic().sections[2].startTime - (oldEnd - 2.0)) < 0.01, "boundary move failed");
-        p.editTrack ([] (TrackEngine& e) { e.undo(); });
-        p.editTrack ([] (TrackEngine& e) { e.undo(); });
-        CHECK (p.getTrack().getMusic().sections[3].type == SectionType::Break
-               && std::abs (p.getTrack().getMusic().sections[1].endTime - oldEnd) < 0.01, "undo of structure edits failed");
-
-        // 5. Coherence: big width jump flagged at 0 %, smoothed at 100 %.
-        p.editTrack ([] (TrackEngine& e) { e.apply (Sel::section (2), 1, 1.0f); e.apply (Sel::section (3), 2, 1.0f); });
-        const auto w0 = p.getTrack().coherenceWarnings (0.0f), w1 = p.getTrack().coherenceWarnings (1.0f);
-        std::cout << "    coherence warnings at 0%: " << w0.size() << " (" << w0.joinIntoString (" | ") << "), at 100%: " << w1.size() << "\n";
-        CHECK (w0.size() > w1.size(), "Coherence does not reduce disparities");
-
-        // 6. Transition edit lands on the boundary.
-        p.editTrack ([] (TrackEngine& e) { e.apply (Sel::transition (1), 1, 1.0f); });
-        const auto* te = p.getTrack().editFor (Sel::transition (1));
-        CHECK (te != nullptr, "transition edit missing");
-        if (te != nullptr)
-        {
-            const auto [a, b] = p.getTrack().rangeOf (*te);
-            CHECK (std::abs (b - S[2].startTime) < 0.01 && b - a < 1.0, "transition edit is not right before the drop");
-        }
-
-        // 7. Everything survives save / reload.
-        juce::MemoryBlock state;
-        p.getStateInformation (state);
-        FINISHAudioProcessor q;
-        q.setStateInformation (state.getData(), (int) state.getSize());
-        CHECK (q.getTrack().getMusic().sections.size() == p.getTrack().getMusic().sections.size(), "sections not restored");
-        CHECK (q.getTrack().getEdits().size() == p.getTrack().getEdits().size(), "edits not restored");
-        const auto pa = p.getTrack().compilePlan(), qa = q.getTrack().compilePlan();
-        bool samePlan = pa.count == qa.count;
-        for (int i = 0; samePlan && i < pa.count; ++i)
-            samePlan = std::abs (pa.edits[(size_t) i].start - qa.edits[(size_t) i].start) < 1e-3
-                    && std::abs (pa.edits[(size_t) i].to.width - qa.edits[(size_t) i].to.width) < 1e-3f;
-        CHECK (samePlan, "section plan differs after reload");
+        std::cout << "  rendered " << out.getFullPathName() << "\n";
     }
-
-    // 8. Build already at drop energy: FINISH blames the transition, not the drop.
-    {
-        MixOptions o; o.levelDb = -6.0f; o.denseBuild = true;
-        const auto mix = makeMix (o);
-        FINISHAudioProcessor p; TestPlayHead ph;
-        analyseTimed (p, ph, mix, o.sr, 0.0);
-        std::cout << "  dense build:\n";
-        printTrack (p.getTrack());
-        bool flagged = false;
-        for (auto& tr : p.getTrack().getTransitions())
-            if (tr.kind == Transition::Kind::IntoPeak && ! tr.works) flagged = true;
-        const auto& S = p.getTrack().getMusic().sections;
-        bool dropsFound = false; for (auto& s : S) dropsFound |= s.type == SectionType::Drop;
-        CHECK (dropsFound, "drops not detected with a dense build");
-        CHECK (flagged || S.size() < 6, "weak arrival into the drop not flagged");
-    }
-
-    // 9. Break that doesn't breathe.
-    {
-        MixOptions o; o.levelDb = -6.0f; o.denseBreak = true;
-        const auto mix = makeMix (o);
-        FINISHAudioProcessor p; TestPlayHead ph;
-        analyseTimed (p, ph, mix, o.sr, 0.0);
-        std::cout << "  dense break:\n";
-        printTrack (p.getTrack());
-        bool breathFlagged = false;
-        for (size_t i = 0; i < p.getTrack().getMusic().sections.size(); ++i)
-        {
-            const auto type = p.getTrack().getMusic().sections[i].type;
-            if ((isBreathType (type) || type == SectionType::Verse) && p.getTrack().getVerdicts()[i].potential >= 0.5f) breathFlagged = true;
-        }
-        for (auto& tr : p.getTrack().getTransitions())
-            if (tr.kind == Transition::Kind::OutOfPeak && ! tr.works) breathFlagged = true;
-        CHECK (breathFlagged, "a break that doesn't breathe was not flagged");
-    }
-}
-
-static void writePng (juce::Component& c, const juce::File& file)
-{
-    auto img = c.createComponentSnapshot (c.getLocalBounds(), true, 2.0f);
-    file.deleteFile();
-    juce::FileOutputStream out (file);
-    juce::PNGImageFormat().writeImageToStream (img, out);
-    std::cout << "  wrote " << file.getFileName() << "\n";
-}
-
-static void pump (int ms) { juce::MessageManager::getInstance()->runDispatchLoopUntil (ms); }
-
-static void snapshot (const juce::File& base)
-{
-    std::cout << "Rendering editor snapshots\n";
-    using Sel = TrackEngine::Selection;
-    auto file = [&] (const char* suffix) { return base.getSiblingFile (base.getFileNameWithoutExtension() + "_" + suffix + ".png"); };
-
-    MixOptions o; o.levelDb = -6.0f; o.seconds = 170; o.denseBreak = true;
-    const auto mix = makeMix (o);
-
-    FINISHAudioProcessor p;
-    TestPlayHead ph;
-    p.prepareToPlay (o.sr, 512);
-    p.setPlayHead (&ph);
-    std::unique_ptr<juce::AudioProcessorEditor> ed (p.createEditorIfNeeded());
-    auto* e = dynamic_cast<FINISHAudioProcessorEditor*> (ed.get());
-    if (e == nullptr) return;
-    feedTimed (p, ph, slice (mix, o.sr, 0, 3), o.sr, 12.0, 512, true);
-    pump (200);
-    writePng (*e, file ("idle"));
-    e->setPage (FINISHAudioProcessorEditor::sections);
-
-    // Listening, half-way through the song.
-    p.toggleAnalysis();
-    feedTimed (p, ph, slice (mix, o.sr, 0, 96), o.sr, 12.0, 512, true);
-    pump (200);
-    writePng (*e, file ("listening"));
-    feedTimed (p, ph, slice (mix, o.sr, 96, 170), o.sr, 12.0 + 96.0, 512, true);
-    ph.playing = false;
-    feedTimed (p, ph, slice (mix, o.sr, 0, 0.5), o.sr, 12.0 + 170.0, 512, true);
-    ph.playing = true;
-    pump (200);
-
-    p.setIntent ("plus large mais pas plus fort");
-    e->getCommandStrip().refresh();
-    // Apply DROP 1 · A, keep the playhead inside DROP 2.
-    p.editTrack ([] (TrackEngine& t) { t.apply (Sel::section (3), 0, 1.0f); });
-    const auto& S = p.getTrack().getMusic().sections;
-    int breakIndex = -1;
-    for (size_t i = 0; i < S.size(); ++i) if (isBreathType (S[i].type)) breakIndex = (int) i;
-    feedTimed (p, ph, slice (mix, o.sr, 122, 124), o.sr, 12.0 + 122.0, 512, true);
-    pump (200);
-    if (breakIndex >= 0)
-    {
-        e->select (Sel::section (breakIndex));
-        p.editTrack ([breakIndex] (TrackEngine& t) { t.preview (Sel::section (breakIndex), 2, 1.0f); });
-        e->getInspector().refresh();
-    }
-    pump (250);
-    writePng (*e, file ("section"));
-
-    p.editTrack ([] (TrackEngine& t) { t.clearPreview(); });
-    e->select (Sel::transition (std::max (0, breakIndex - 1)));
-    pump (250);
-    writePng (*e, file ("transition"));
-
-    e->select (Sel::track());
-    pump (250);
-    writePng (*e, file ("track"));
-    ed.reset();
-
-    // COMPOSE + MASTER pages from a drop played in the DAW.
-    {
-        double bpm = 0;
-        const auto drop = renderReferenceDropForTests (o.sr, bpm);
-        FINISHAudioProcessor q;
-        TestPlayHead ph2; ph2.bpm = bpm;
-        q.prepareToPlay (o.sr, 512);
-        q.setPlayHead (&ph2);
-        std::unique_ptr<juce::AudioProcessorEditor> ed2 (q.createEditorIfNeeded());
-        auto* e2 = dynamic_cast<FINISHAudioProcessorEditor*> (ed2.get());
-        if (e2 == nullptr) return;
-        feedTimed (q, ph2, drop, o.sr, 64.0 * 60.0 / bpm, 512, true);
-        ph2.playing = false;
-        feedTimed (q, ph2, slice (drop, o.sr, 0, 0.3), o.sr, 0.0, 512, true);
-        q.finishMyTrack();
-        for (int i = 0; i < 300 && ! q.getComposer().hasArrangement(); ++i) pump (20);
-        pump (100);
-        e2->selectArrangementSection (2);
-        q.previewSection (2, true);
-        ph2.playing = true;
-        juce::AudioBuffer<float> sil (2, (int) (o.sr * 3)); sil.clear();
-        feedTimed (q, ph2, sil, o.sr, 300.0, 512, true);
-        pump (150);
-        writePng (*e2, file ("compose"));
-        q.stopPreview();
-        e2->selectArrangementSection (4);
-        pump (100);
-        writePng (*e2, file ("compose_break"));
-        e2->setPage (FINISHAudioProcessorEditor::master);
-        for (int k = 0; k < 4; ++k) { feedTimed (q, ph2, drop, o.sr, 64.0 * 60.0 / bpm, 512, true); }
-        pump (150);
-        writePng (*e2, file ("master"));
-        e2->getMasterView().showReport (true);
-        pump (100);
-        writePng (*e2, file ("master_report"));
-        ed2.reset();
-    }
-
-    // PROJECT page: the demo Live set as read by the Remote Script
-    {
-        FINISHAudioProcessor q;
-        q.prepareToPlay (o.sr, 512);
-        std::unique_ptr<juce::AudioProcessorEditor> ed3 (q.createEditorIfNeeded());
-        auto* e3 = dynamic_cast<FINISHAudioProcessorEditor*> (ed3.get());
-        if (e3 == nullptr) return;
-        pump (100);
-        writePng (*e3, file ("project_connect"));
-        q.showProject (LiveProject::fromFile (juce::File (FINISH_SOURCE_DIR).getChildFile ("Tests/fixtures/project_demo.json")));
-        pump (150);
-        writePng (*e3, file ("project"));
-        q.setIntent (utf8 ("termine mon morceau sans toucher à ma mélodie principale"));
-        q.editProject ([] (ProjectSession& s) { s.setLevel (Level::Improve); });
-        pump (150);
-        writePng (*e3, file ("project_improve"));
-        ed3.reset();
-    }
-}
-
-// Step-by-step screens for the demo video: the real plugin, talking to the real Remote Script on a mock Live
-// (Tests/live_mock_server.py must be running with the same HOME).
-static void demo (const juce::File& dir)
-{
-    std::cout << "Rendering demo screens\n";
-    dir.createDirectory();
-    auto file = [&] (const char* n) { return dir.getChildFile (juce::String (n) + ".png"); };
-    const double sr = 48000.0;
-    FINISHAudioProcessor p;
-    p.setPlayConfigDetails (2, 2, sr, 512);
-    p.prepareToPlay (sr, 512);
-    TestPlayHead ph; ph.bpm = 115.0; ph.playing = false;
-    p.setPlayHead (&ph);
-    std::unique_ptr<juce::AudioProcessorEditor> ed (p.createEditorIfNeeded());
-    auto* e = dynamic_cast<FINISHAudioProcessorEditor*> (ed.get());
-    if (e == nullptr) return;
-    auto waitFor = [&] (std::function<bool()> f, int ms) { for (int t = 0; t < ms && ! f(); t += 50) pump (50); };
-    waitFor ([&] { return p.getProject().getDiagnosis().connected(); }, 8000);
-    pump (300);
-    writePng (*e, file ("01_connected"));
-
-    p.readLiveProject();
-    waitFor ([&] { return p.getProject().hasPlan() && p.getProject().getPhase() == ProjectSession::Phase::Ready; }, 15000);
-    pump (500);
-    writePng (*e, file ("02_read"));
-    p.showSoundInventory();
-    pump (300);
-    writePng (*e, file ("02b_sounds"));
-
-    p.setIntent (utf8 ("termine mon morceau sans toucher à ma mélodie principale"));
-    e->getCommandStrip().refresh();
-    pump (400);
-    writePng (*e, file ("03_command"));
-
-    p.editProject ([] (ProjectSession& s) { s.setLevel (Level::Improve); });
-    pump (400);
-    writePng (*e, file ("04_improve"));
-
-    // Approximate preview (plays through processBlock)
-    p.previewProject (-1, false);
-    {
-        juce::AudioBuffer<float> sil (2, (int) (sr * 9.0)); sil.clear();
-        juce::MidiBuffer mb; juce::AudioBuffer<float> blk (2, 512);
-        for (int pos = 0; pos < sil.getNumSamples(); pos += 512) { blk.clear(); p.processBlock (blk, mb); if ((pos / 512) % 100 == 0) pump (5); }
-    }
-    pump (300);
-    writePng (*e, file ("05_preview"));
-    p.stopPreview();
-    dir.getChildFile ("confirm.txt").replaceWithText (p.getProject().confirmText());
-
-    p.sendProjectToLive();
-    waitFor ([&] { return p.getProject().hasSent() && p.getProject().getPhase() == ProjectSession::Phase::Ready && p.getAnswer().contains ("clips"); }, 20000);
-    pump (600);
-    writePng (*e, file ("06_sent"));
-    dir.getChildFile ("report.txt").replaceWithText (p.getProject().getLastReport());
-
-    // Mastering on a mix with problems (low-mid build-up, stereo bass)
-    ph.playing = true;
-    const auto mix = makeProblemMix (sr, 30.0, 0.05f);
-    feedTimed (p, ph, mix, sr, 10.0, 512, true);
-    p.applyRecommendedTarget();
-    feedTimed (p, ph, mix, sr, 40.0, 512, true);
-    pump (2200);
-    feedTimed (p, ph, mix, sr, 70.0, 512, true);
-    pump (2200);
-    e->setPage (FINISHAudioProcessorEditor::master);
-    feedTimed (p, ph, juce::AudioBuffer<float> (mix), sr, 100.0, 512, true);
-    pump (300);
-    writePng (*e, file ("07_master"));
-    e->getMasterView().showReport (true);
-    pump (300);
-    writePng (*e, file ("08_master_report"));
-    ed.reset();
-    juce::File (juce::SystemStats::getEnvironmentVariable ("FINISH_E2E_HOME", {})).getChildFile ("stop").create();
 }
 
 int main (int argc, char** argv)
 {
     juce::ScopedJuceInitialiser_GUI gui;
+    juce::StringArray args;
+    for (int i = 1; i < argc; ++i) args.add (juce::String::fromUTF8 (argv[i]));
 
-    const bool composeOnly = argc > 1 && juce::String (argv[1]) == "--compose";
-    const bool projectOnly = argc > 1 && juce::String (argv[1]) == "--project";
-    if (argc > 2 && juce::String (argv[1]) == "--demo")
-    {
-        demo (juce::File::getCurrentWorkingDirectory().getChildFile (argv[2]));
-        return 0;
-    }
-    if (argc > 1 && juce::String (argv[1]) == "--master")
-    {
-        testMasterDoctor();
-        std::cout << "\n" << (checks - failures) << "/" << checks << " checks passed\n";
-        return failures == 0 ? 0 : 1;
-    }
-    runProjectTests();
-    if (projectOnly)
-    {
-        std::cout << "\n" << (checks - failures) << "/" << checks << " checks passed\n";
-        return failures == 0 ? 0 : 1;
-    }
-    runComposeTests();
-    if (composeOnly)
-    {
-        std::cout << "\n" << (checks - failures) << "/" << checks << " checks passed\n";
-        return failures == 0 ? 0 : 1;
-    }
+    if (args[0] == "--snap") { runSnapshots (juce::File::getCurrentWorkingDirectory().getChildFile (args[1]), args[2]); return failures; }
+    if (args[0] == "--render") { renderFile (juce::File::getCurrentWorkingDirectory().getChildFile (args[1]), juce::File::getCurrentWorkingDirectory().getChildFile (args[2]), args[3].isEmpty() ? 0 : args[3].getIntValue()); return failures; }
 
     testTransparency();
-    testStrategies();
-    testTruePeakDetector();
-    testLimiterOnMusic();
-    testLoudnessTargets();
-    testCreativeFx();
-    testSampleRates();
-    testDiagnosis();
-    testIntent();
-    testProcessorAndState();
-    testTrackEngine();
-    testFinishEndToEnd();
-    testMasterDoctor();
-
-    for (int i = 1; i + 1 < argc; ++i)
-        if (juce::String (argv[i]) == "--snapshot")
-            snapshot (juce::File::getCurrentWorkingDirectory().getChildFile (argv[i + 1]));
-
-    std::cout << "\n" << (checks - failures) << "/" << checks << " checks passed\n";
+    testCeiling();
+    testLoudnessLoopAndAB();
+    testAutoProfiles();
+    testAutoEndToEnd();
+    testPresetsAndState();
+    std::cout << (failures == 0 ? "\nALL TESTS PASSED\n" : "\nFAILURES: " + std::to_string (failures) + "\n");
     return failures == 0 ? 0 : 1;
 }

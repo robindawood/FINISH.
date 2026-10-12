@@ -1,20 +1,20 @@
-name: Build FINISH
+name: Build WHALE
 
 # Builds ready-to-install files:
-#   macOS   : FINISH-<version>-macOS.pkg        (VST3 + AU, Apple Silicon + Intel)
-#   Windows : FINISH-<version>-Windows-Setup.exe (VST3, 64-bit)
+#   macOS   : WHALE-<version>-macOS.pkg          (VST3 + AU, Apple Silicon + Intel)
+#   Windows : WHALE-<version>-Windows-Setup.exe  (VST3, 64-bit)
 # plus plain zips, after running the offline tests and pluginval.
-# Download them from the "Artifacts" section of the run, or from the Release created when you push a tag (v3.0.0).
+# Download them from the "Artifacts" section of the run, or from the "installers-whale" branch.
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [ main, master, whale ]
     tags: [ 'v*' ]
   pull_request:
   workflow_dispatch:
 
 env:
-  VERSION: 3.1.0
+  VERSION: 1.0.0
 
 jobs:
   build:
@@ -22,7 +22,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     defaults:
       run:
-        # Sources live in a neutral folder: Windows refuses paths ending with "." (repository name "FINISH.").
+        # Sources live in a neutral folder: Windows refuses paths ending with "." (repository name "finish.").
         working-directory: ${{ matrix.src }}
     strategy:
       fail-fast: false
@@ -30,7 +30,7 @@ jobs:
         include:
           - name: Windows
             os: windows-latest
-            src: 'C:/fsrc'
+            src: 'C:/wsrc'
           - name: macOS
             os: macos-latest
             src: src
@@ -40,7 +40,7 @@ jobs:
         if: runner.os == 'Windows'
         working-directory: 'C:/'
         shell: bash
-        run: git clone --depth 1 "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" /c/fsrc
+        run: git clone --depth 1 --branch "${{ github.head_ref || github.ref_name }}" "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" /c/wsrc
 
       - uses: actions/checkout@v4
         if: runner.os != 'Windows'
@@ -48,38 +48,24 @@ jobs:
           path: src
 
       - name: Configure
-        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DFINISH_BUILD_TESTS=ON
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DWHALE_BUILD_TESTS=ON
 
       - name: Build plugin and tests
-        run: cmake --build build --config Release --parallel 4 --target FINISH_All FinishTests
+        run: cmake --build build --config Release --parallel 4 --target WHALE_All WhaleTests
 
       - name: Run offline tests (Windows)
         if: runner.os == 'Windows'
-        run: build/FinishTests_artefacts/Release/FinishTests.exe
+        run: build/WhaleTests_artefacts/Release/WhaleTests.exe
 
       - name: Run offline tests (macOS)
         if: runner.os == 'macOS'
-        run: build/FinishTests_artefacts/Release/FinishTests
-
-      - name: Test the Ableton Live bridge script (mock Live API)
-        if: runner.os == 'macOS'
-        run: python3 Tests/test_live_bridge.py live_request_test.json build/test_out/plan_request_improve.json
-
-      - name: End to end - plugin <-> Remote Script on a mock Live (read, plan, write, undo)
-        if: runner.os == 'macOS'
-        run: |
-          python3 Tests/live_mock_server.py "$HOME" 120 > mocklive.log 2>&1 &
-          sleep 2
-          FINISH_E2E_HOME="$HOME" build/FinishTests_artefacts/Release/FinishTests --project
-          sleep 2
-          cat mocklive.log
-          python3 -c "import json,os; h=os.environ['HOME']; a=json.load(open(h+'/initial_state.json')); b=json.load(open(h+'/final_state.json')); assert a==b, 'set not restored after undo'; print('set restored after undo')"
+        run: build/WhaleTests_artefacts/Release/WhaleTests
 
       - name: Ad-hoc sign (macOS)
         if: runner.os == 'macOS'
         run: |
-          codesign --force --deep --sign - build/FINISH_artefacts/Release/VST3/FINISH.vst3
-          codesign --force --deep --sign - build/FINISH_artefacts/Release/AU/FINISH.component
+          codesign --force --deep --sign - build/WHALE_artefacts/Release/VST3/WHALE.vst3
+          codesign --force --deep --sign - build/WHALE_artefacts/Release/AU/WHALE.component
 
       - name: Validate with pluginval (Windows)
         if: runner.os == 'Windows'
@@ -87,14 +73,14 @@ jobs:
         run: |
           curl -sSL -o pluginval.zip https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_Windows.zip
           7z x pluginval.zip -opluginval > /dev/null
-          ./pluginval/pluginval.exe --strictness-level 10 --skip-gui-tests --validate-in-process --validate "build/FINISH_artefacts/Release/VST3/FINISH.vst3"
+          ./pluginval/pluginval.exe --strictness-level 10 --skip-gui-tests --validate-in-process --validate "build/WHALE_artefacts/Release/VST3/WHALE.vst3"
 
       - name: Validate with pluginval (macOS)
         if: runner.os == 'macOS'
         run: |
           curl -sSL -o pluginval.zip https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_macOS.zip
           unzip -q pluginval.zip -d pluginval
-          ./pluginval/pluginval.app/Contents/MacOS/pluginval --strictness-level 10 --skip-gui-tests --validate-in-process --validate build/FINISH_artefacts/Release/VST3/FINISH.vst3
+          ./pluginval/pluginval.app/Contents/MacOS/pluginval --strictness-level 10 --skip-gui-tests --validate-in-process --validate build/WHALE_artefacts/Release/VST3/WHALE.vst3
 
       # ---------------- macOS installer (.pkg) ----------------
       - name: Build macOS installer
@@ -102,40 +88,20 @@ jobs:
         run: |
           set -e
           mkdir -p pkg/vst3 pkg/au dist
-          cp -R build/FINISH_artefacts/Release/VST3/FINISH.vst3 pkg/vst3/
-          cp -R build/FINISH_artefacts/Release/AU/FINISH.component pkg/au/
+          cp -R build/WHALE_artefacts/Release/VST3/WHALE.vst3 pkg/vst3/
+          cp -R build/WHALE_artefacts/Release/AU/WHALE.component pkg/au/
           for kind in vst3 au; do
             pkgbuild --analyze --root pkg/$kind pkg/$kind.plist
             plutil -replace 0.BundleIsRelocatable -bool NO pkg/$kind.plist
           done
           pkgbuild --root pkg/vst3 --component-plist pkg/vst3.plist --install-location "/Library/Audio/Plug-Ins/VST3" \
-                   --identifier com.finishaudio.finish.vst3 --version "$VERSION" pkg/FINISH-VST3.pkg
+                   --identifier com.whaleaudio.whale.vst3 --version "$VERSION" pkg/WHALE-VST3.pkg
           pkgbuild --root pkg/au --component-plist pkg/au.plist --install-location "/Library/Audio/Plug-Ins/Components" \
-                   --identifier com.finishaudio.finish.au --version "$VERSION" pkg/FINISH-AU.pkg
-          # Ableton Live bridge: payload in Application Support, copied into the user's Live User Library after install
-          mkdir -p "pkg/live/FINISH/LiveScript" pkg/livescripts
-          cp Resources/LiveScript/*.py "pkg/live/FINISH/LiveScript/"
-          cat > pkg/livescripts/postinstall <<'POST'
-          #!/bin/bash
-          U=$(stat -f%Su /dev/console)
-          H=$(dscl . -read "/Users/$U" NFSHomeDirectory 2>/dev/null | awk '{print $2}')
-          [ -z "$H" ] && H="/Users/$U"
-          if [ -d "$H/Music/Ableton" ]; then
-            D="$H/Music/Ableton/User Library/Remote Scripts/FINISH"
-            mkdir -p "$D"
-            cp "/Library/Application Support/FINISH/LiveScript/"*.py "$D/"
-            chown -R "$U" "$H/Music/Ableton/User Library/Remote Scripts" || true
-          fi
-          exit 0
-          POST
-          sed -i '' 's/^          //' pkg/livescripts/postinstall
-          chmod +x pkg/livescripts/postinstall
-          pkgbuild --root pkg/live --scripts pkg/livescripts --install-location "/Library/Application Support" \
-                   --identifier com.finishaudio.finish.livebridge --version "$VERSION" pkg/FINISH-LiveBridge.pkg
-          productbuild --package pkg/FINISH-VST3.pkg --package pkg/FINISH-AU.pkg --package pkg/FINISH-LiveBridge.pkg "dist/FINISH-$VERSION-macOS.pkg"
+                   --identifier com.whaleaudio.whale.au --version "$VERSION" pkg/WHALE-AU.pkg
+          productbuild --package pkg/WHALE-VST3.pkg --package pkg/WHALE-AU.pkg "dist/WHALE-$VERSION-macOS.pkg"
           mkdir zipdir
-          cp -R build/FINISH_artefacts/Release/VST3/FINISH.vst3 build/FINISH_artefacts/Release/AU/FINISH.component INSTALL_FR.txt zipdir/
-          (cd zipdir && zip -qry "../dist/FINISH-$VERSION-macOS-VST3-AU.zip" .)
+          cp -R build/WHALE_artefacts/Release/VST3/WHALE.vst3 build/WHALE_artefacts/Release/AU/WHALE.component INSTALL_FR.txt zipdir/
+          (cd zipdir && zip -qry "../dist/WHALE-$VERSION-macOS-VST3-AU.zip" .)
 
       # ---------------- Windows installer (.exe) ----------------
       - name: Build Windows installer
@@ -145,19 +111,19 @@ jobs:
           $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
           if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress | Out-Null }
           New-Item -ItemType Directory -Force -Path dist | Out-Null
-          & $iscc "/DAppVersion=$env:VERSION" "/O$PWD\dist" Installer\FINISH.iss
+          & $iscc "/DAppVersion=$env:VERSION" "/O$PWD\dist" Installer\WHALE.iss
           if ($LASTEXITCODE -ne 0) { exit 1 }
           New-Item -ItemType Directory -Force -Path zipdir | Out-Null
-          Copy-Item -Recurse build/FINISH_artefacts/Release/VST3/FINISH.vst3 zipdir/
+          Copy-Item -Recurse build/WHALE_artefacts/Release/VST3/WHALE.vst3 zipdir/
           Copy-Item INSTALL_FR.txt zipdir/
-          Compress-Archive -Path zipdir/* -DestinationPath "dist/FINISH-$env:VERSION-Windows-VST3.zip"
+          Compress-Archive -Path zipdir/* -DestinationPath "dist/WHALE-$env:VERSION-Windows-VST3.zip"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: FINISH-${{ matrix.name }}
+          name: WHALE-${{ matrix.name }}
           path: ${{ matrix.src }}/dist/*
 
-  # Also store the installers on the "installers" branch of the repository (easy to fetch with git).
+  # Also store the installers on the "installers-whale" branch (FINISH keeps "installers").
   publish:
     needs: build
     if: always() && github.event_name == 'push'
@@ -175,10 +141,10 @@ jobs:
           ls -la out
           cd out
           git init -q
-          git checkout -q -b installers
+          git checkout -q -b installers-whale
           git add .
-          git -c user.name=github-actions -c user.email=actions@github.com commit -qm "Installers for ${GITHUB_SHA}"
-          git push -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" installers
+          git -c user.name=github-actions -c user.email=actions@github.com commit -qm "WHALE installers for ${GITHUB_SHA}"
+          git push -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" installers-whale
 
   release:
     needs: build

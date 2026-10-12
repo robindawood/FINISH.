@@ -40,6 +40,9 @@ public:
     // Consumer side (one consumer thread).
     int readFrames (AnalysisFrame* dest, int maxFrames) noexcept;
     int readSamples (float* dest, int maxSamples) noexcept;
+    // 1 kHz rhythm envelopes (mean |low band < 150 Hz| and |high band > 4 kHz|), for tempo detection.
+    int readEnvelopes (float* lowDest, float* highDest, int maxPoints) noexcept;
+    static constexpr double envelopeRate = 1000.0;
 
     void setPublishSamples (bool shouldPublish) noexcept { publishSamples = shouldPublish; }
 
@@ -68,4 +71,10 @@ private:
     static constexpr int sampleCapacity = 1 << 15;
     juce::AbstractFifo sampleFifo { sampleCapacity };
     std::vector<float> sampleStorage;
+
+    static constexpr int envCapacity = 1 << 15;
+    juce::AbstractFifo envFifo { envCapacity };
+    std::vector<float> envLowStorage, envHighStorage;
+    double envAccLo = 0, envAccHi = 0;
+    int envCount = 0, envLength = 44;
 };

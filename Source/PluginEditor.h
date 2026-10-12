@@ -1,121 +1,66 @@
 #pragma once
 #include <JuceHeader.h>
 #include "PluginProcessor.h"
-#include "UI/NightLookAndFeel.h"
-#include "UI/TrackMapView.h"
-#include "UI/Inspector.h"
-#include "UI/Panels.h"
-#include "UI/ComposeViews.h"
-#include "UI/MasterViews.h"
-#include "UI/ProjectViews.h"
+#include "UI/Widgets.h"
+#include "UI/WhaleScene.h"
+#include "UI/PresetBrowser.h"
+#include "UI/ExpertPanel.h"
 
-// Big round illuminated key (FINISH MY TRACK).
-class ArcadeButton : public juce::Button
+// Fixed 1200 x 750 design, scaled as a whole when the window is resized.
+class WhaleEditor : public juce::AudioProcessorEditor, private juce::Timer
 {
 public:
-    ArcadeButton() : juce::Button ("FINISH MY TRACK") {}
-    enum class Mode { Idle, Listening, Working, Ready };
-    void setMode (Mode m, double seconds) { mode = m; listenSeconds = seconds; repaint(); }
-    void paintButton (juce::Graphics&, bool highlighted, bool down) override;
-private:
-    Mode mode = Mode::Idle;
-    double listenSeconds = 0;
-};
-
-// The header LCD: shows what FINISH is doing; click and type to ask for anything (FR / EN).
-class CommandStrip : public juce::Component
-{
-public:
-    explicit CommandStrip (FINISHAudioProcessor&);
-    std::function<void()> onSubmit;
-    void refresh();
+    explicit WhaleEditor (WhaleAudioProcessor&);
+    ~WhaleEditor() override;
     void paint (juce::Graphics&) override;
     void resized() override;
-    juce::TextEditor editor;
+    bool keyPressed (const juce::KeyPress&) override;
+
+    static constexpr int designW = 1200, designH = 750;
+
+    friend struct TestAccess;
 private:
-    FINISHAudioProcessor& proc;
-};
-
-class FINISHAudioProcessorEditor : public juce::AudioProcessorEditor, public juce::DragAndDropContainer, private juce::Timer
-{
-public:
-    explicit FINISHAudioProcessorEditor (FINISHAudioProcessor&);
-    ~FINISHAudioProcessorEditor() override;
-
-    void paint (juce::Graphics&) override {}
-    void resized() override;
-
-    static constexpr int baseWidth = 1200, baseHeight = 800;
-    enum Page { projectPage = 0, compose = 1, sections = 2, master = 3 };
-    static constexpr int numPages = 4;
-
-    struct Content : public juce::Component
+    class Content : public juce::Component
     {
-        explicit Content (FINISHAudioProcessorEditor& e) : editor (e) {}
-        void paint (juce::Graphics&) override;
+    public:
+        explicit Content (WhaleEditor& e) : owner (e) {}
+        void paint (juce::Graphics& g) override;
         void resized() override;
-        FINISHAudioProcessorEditor& editor;
+        WhaleEditor& owner;
     };
 
-    void select (TrackEngine::Selection);
-    void setPage (int page);
-    int getPage() const noexcept { return page; }
-    Inspector& getInspector() noexcept { return inspector; }
-    TrackPanel& getTrackPanel() noexcept { return trackPanel; }
-    CommandStrip& getCommandStrip() noexcept { return command; }
-    ArrangementView& getArrangementView() noexcept { return arrangement; }
-    ComposeConsole& getComposeConsole() noexcept { return composeConsole; }
-    MasterView& getMasterView() noexcept { return masterView; }
-    void selectArrangementSection (int s);
-
-private:
     void timerCallback() override;
-    void refreshAll();
-    void updateFinishButton();
-    void chooseReference();
-    void autoSelectBiggestOpportunity();
+    void layout();
+    void openExpert (int module);
+    void showMenu();
+    bool reducedAnimations() const;
+    void setReducedAnimations (bool);
 
-    FINISHAudioProcessor& proc;
-    NightLookAndFeel lnf;
+    WhaleAudioProcessor& proc;
+    WhaleLookAndFeel lnf;
     Content content { *this };
-    int page = projectPage;
+   #if JUCE_MODULE_AVAILABLE_juce_opengl
+    juce::OpenGLContext gl;
+   #endif
+    juce::TooltipWindow tooltips { this, 600 };
 
-    ArcadeButton finishButton;
-    std::array<juce::TextButton, numPages> tabs;
-    juce::TextButton refButton { "REFERENCE" }, refClear { "X" };
-    juce::TextButton matchButton { "MATCH" }, bypassButton { "A/B" };
-    CommandStrip command;
+    WhaleScene scene;
+    PresetBar presetBar;
+    ABSwitch ab;
+    TextLink expertLink { "EXPERT" }, menuLink { juce::String::fromUTF8 ("\xe2\x89\xa1") };
+    ChainStrip chain;
+    AutoButton autoButton;
+    juce::ComboBox styleBox, targetBox;
+    juce::Slider dosage;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> styleAtt, targetAtt;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> dosageAtt;
+    std::vector<std::unique_ptr<MacroKnob>> knobs;
+    MeterPanel meters;
+    ExpertPanel expert;
+    PresetBrowser browser;
 
-    // SECTIONS page
-    TrackMapView trackMap;
-    Inspector inspector;
-    TrackPanel trackPanel;
-    // COMPOSE page
-    ArrangementView arrangement;
-    ComposeColumn composeColumn;
-    ComposeConsole composeConsole;
-    // PROJECT page (the user's Live set)
-    ProjectView projectView;
-    ProjectColumn projectColumn;
-    ProjectConsole projectConsole;
-    int lastAnswerVersion = -1, lastProjectVersion = -1;
-    // MASTER page
-    MasterView masterView;
-    MasterColumn masterColumn;
-    MasterConsole masterConsole;
-
-    ControlDeck deck;
-
-    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> bypassAttachment, matchAttachment;
-    std::unique_ptr<juce::FileChooser> chooser;
-    juce::Image faceplate;
-    int lastVersion = -1;
-    double lastMapStart = -1.0;
-    size_t lastSectionCount = 0;
-    bool wasListening = false;
-    bool hadArrangement = false;
-    juce::TooltipWindow tooltips { this, 500 };
-
-    friend struct Content;
-    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (FINISHAudioProcessorEditor)
+    double lastTime = 0;
+    float tpHold = -100, tpHoldAge = 0, peak10 = -100, peak10Age = 0, lufsSmooth = -70;
+    int frameCounter = 0;
+    float forcedDt = 0.0f;   // tests: simulated frame time
 };

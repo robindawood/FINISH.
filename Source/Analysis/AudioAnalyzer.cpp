@@ -3,12 +3,15 @@
 AudioAnalyzer::AudioAnalyzer()
 {
     sampleStorage.resize ((size_t) sampleCapacity, 0.0f);
+    envLowStorage.resize ((size_t) envCapacity, 0.0f);
+    envHighStorage.resize ((size_t) envCapacity, 0.0f);
 }
 
 void AudioAnalyzer::prepare (double sampleRate)
 {
     sr = sampleRate;
     frameLength = juce::jmax (1, (int) std::round (sr * 0.1));
+    envLength = juce::jmax (1, (int) std::round (sr / envelopeRate));
     kw.prepare (sr);
     for (auto* b : { &lowLp, &lowLp2, &sideLowLp, &sideLowLp2 })   b->setLowPass (sr, 150.0, 0.7071);
     for (auto* b : { &highHp, &highHp2, &sideHighHp, &sideHighHp2 }) b->setHighPass (sr, 4000.0, 0.7071);
@@ -30,6 +33,7 @@ void AudioAnalyzer::reset()
     accPeak = accOnset = 0;
     accSub = accLowMid = accPres = 0; accClips = 0;
     frameCount = 0;
+    envAccLo = envAccHi = 0; envCount = 0;
 }
 
 void AudioAnalyzer::process (const float* L, const float* R, int n, double blockTime) noexcept
@@ -60,6 +64,21 @@ void AudioAnalyzer::process (const float* L, const float* R, int n, double block
         accLowSide += (double) (ls * ls);
         const float hs = sideHighHp2.process (sideHighHp.process (side, 0), 0);
         accHighSide += (double) (hs * hs);
+        envAccLo += std::abs (lo);
+        envAccHi += std::abs (hi);
+        if (++envCount >= envLength)
+        {
+            if (envFifo.getFreeSpace() > 0)
+            {
+                int s1, n1, s2, n2;
+                envFifo.prepareToWrite (1, s1, n1, s2, n2);
+                const int at = n1 > 0 ? s1 : s2;
+                envLowStorage[(size_t) at] = (float) (envAccLo / envCount);
+                envHighStorage[(size_t) at] = (float) (envAccHi / envCount);
+                envFifo.finishedWrite (n1 + n2);
+            }
+            envAccLo = envAccHi = 0; envCount = 0;
+        }
         accL += (double) (l * l);
         accR += (double) (r * r);
         accLR += (double) (l * r);
@@ -149,5 +168,15 @@ int AudioAnalyzer::readSamples (float* dest, int maxSamples) noexcept
     if (n1 > 0) std::copy_n (sampleStorage.data() + s1, n1, dest);
     if (n2 > 0) std::copy_n (sampleStorage.data() + s2, n2, dest + n1);
     sampleFifo.finishedRead (n1 + n2);
+    return n1 + n2;
+}
+
+int AudioAnalyzer::readEnvelopes (float* lowDest, float* highDest, int maxPoints) noexcept
+{
+    int s1, n1, s2, n2;
+    envFifo.prepareToRead (maxPoints, s1, n1, s2, n2);
+    for (int i = 0; i < n1; ++i) { lowDest[i] = envLowStorage[(size_t) (s1 + i)]; highDest[i] = envHighStorage[(size_t) (s1 + i)]; }
+    for (int i = 0; i < n2; ++i) { lowDest[n1 + i] = envLowStorage[(size_t) (s2 + i)]; highDest[n1 + i] = envHighStorage[(size_t) (s2 + i)]; }
+    envFifo.finishedRead (n1 + n2);
     return n1 + n2;
 }

@@ -1,74 +1,25 @@
-FINISH 3.1 - Installation et utilisation
-========================================
+WHALE — Mastering
+=================
 
-INSTALLER
-  Mac     : double-clique FINISH-3.1.0-macOS.pkg (VST3 + AU + script Ableton Live).
-            Si macOS bloque : Réglages Système > Confidentialité et sécurité > « Ouvrir quand même ».
-  Windows : double-clique FINISH-3.1.0-Windows-Setup.exe (VST3 + script Ableton Live).
-  Puis relance le scan des plugins (Ableton : Réglages > Plug-ins > Rescanner).
-  IMPORTANT : si Live était ouvert pendant l'installation, redémarre-le (il charge le nouveau script au démarrage).
+INSTALLATION
+------------
+macOS   : double-clique sur WHALE-x.y.z-macOS.pkg (VST3 + AU).
+          Si macOS bloque l'installeur : clic droit > Ouvrir, ou Réglages Système > Confidentialité et sécurité > Ouvrir quand même.
+Windows : lance WHALE-x.y.z-Windows-Setup.exe (VST3 dans C:\Program Files\Common Files\VST3).
 
-RELIER FINISH À TON PROJET LIVE (une seule fois)
-  Réglages de Live (Cmd+, / Ctrl+,) > onglet « Link, Tempo & MIDI » > une ligne « Control Surface » : choisis FINISH.
-  Entrée et Sortie : Aucun.  Le voyant ABLETON LIVE de FINISH passe au vert en 2 secondes.
-  Ce n'est PAS Ableton Link : Link sert seulement à synchroniser le tempo entre applis, FINISH n'en a pas besoin.
-  Si le voyant reste rouge/orange, FINISH affiche ce qui ne va pas (script absent, pas choisi, ancienne version, Live fermé).
+Puis relance un scan des plug-ins :
+  - Ableton Live : Préférences > Plug-ins > Rescan.
+  - FL Studio    : Options > Manage plugins > Find more plugins.
 
-TERMINER TON MORCEAU (page PROJET)
-  1. Mets FINISH en DERNIER sur la piste Master.
-  2. Appuie sur FINISH. Il LIT ton set : pistes, instruments, clips (Arrangement et Session) et toutes tes notes MIDI.
-     Il te dit ce qu'il a compris : rôle de chaque piste, tonalité (calculée sur tes notes), structure (INTRO 1-16, DROP 17-24...),
-     ce qui manque, ce qui est trop court, ce que tu devras faire toi-même.
-  3. Il propose un PLAN, sans rien écrire : les parties à ajouter, et pour chacune de tes pistes ce qu'elle joue
-     (copie exacte de ton clip, ou variation de TES notes : roulement sur ta caisse claire, montée, ton motif ralenti,
-     réponse à ta mélodie, basse simplifiée, accords tenus...). Hachuré = déjà dans ton set ; couleur = à ajouter.
-       - clic sur une partie = aperçu approximatif (sons de FINISH) ; clic droit = autre variante ;
-       - clic sur une case = couper cette piste à cet endroit ; clic sur un nom de piste = la verrouiller (copies exactes seulement) ;
-       - INTERVENTION : COMPLÉTER (aucune note nouvelle) / ENRICHIR / AMÉLIORER (+ transitions, piste FX) / FINALISER (+ mastering) ;
-       - VERSION V1 / V2 / V3 : trois idées pour chaque partie.
-  4. ENVOYER DANS LIVE (confirmation demandée) : tout est écrit sur TES pistes, avec TES instruments et effets.
-     Aucun de tes clips n'est modifié ni déplacé ; une place déjà occupée est sautée et signalée.
-     Le compte rendu dit ce qui a été écrit, sauté, et ce qui reste à faire.
-     ANNULER L'ENVOI retire tout ce que FINISH vient d'ajouter (ou Cmd/Ctrl+Z dans Live).
-  Live 12 conseillé (création de clips dans l'Arrangement). Live 11 : copies de clips possibles, le reste est signalé.
+UTILISATION RAPIDE
+------------------
+1. Mets WHALE en DERNIER sur le bus Master.
+2. Lance la lecture sur la partie la plus forte du morceau (drop / refrain).
+3. Clique sur AUTO : WHALE écoute 12 secondes, règle la chaîne, puis vérifie le résultat.
+4. Compare avec SANS / AVEC (au même volume : tu entends la vraie différence, pas juste « plus fort »).
+5. Ajuste avec les 8 boutons (0 = le choix d'AUTO), ou choisis un preset.
+6. EXPERT : réglages détaillés de chaque module + RAPPORT AUTO (ce qui a été fait, et pourquoi).
 
-TON SON, À L'IDENTIQUE
-  - FINISH écrit uniquement sur TES pistes : tes instruments, presets, plug-ins (VST/AU), effets et samples jouent les
-    nouvelles parties. Il ne charge et ne remplace jamais un instrument.
-  - Les variations partent d'une copie de ton clip : ses enveloppes (filtre, volume...), son groove et ses réglages restent.
-  - SONS DU PROJET : la liste de tes instruments, presets, plug-ins, effets, samples et automations, piste par piste.
-  - ÉCOUTER DANS LIVE : FINISH écrit le plan et lance Live juste avant les nouvelles parties -> tu entends TES vrais sons.
-    Si ça ne va pas : ANNULER L'ENVOI. (APERÇU = écoute rapide dans le plugin avec des sons simplifiés, pas les tiens.)
-  - Après chaque envoi, le compte rendu vérifie qu'aucun instrument ou effet n'a été ajouté, remplacé ou modifié.
-  - Ce que l'API de Live ne permet pas : copier l'automation dessinée dans l'Arrangement. FINISH te dit quelle piste
-    et quel paramètre : copie la lane sur les nouvelles mesures (Cmd/Ctrl+C, Cmd/Ctrl+V).
-  - SONS FINISH (désactivé par défaut) : ajoute des risers/impacts de FINISH sur une piste FINISH FX — ce ne sont pas
-    tes sons, c'est pour ça qu'il faut l'activer toi-même.
-  - Page ESQUISSE > SEND TO LIVE : les parties vont sur TES pistes du même rôle (ta batterie sur tes pads, ta basse...),
-    transposées dans ta tonalité. Une partie sans piste correspondante n'est pas envoyée (et c'est signalé).
-
-PARLER À FINISH (barre du haut, puis Entrée)
-  « termine mon morceau sans toucher à ma mélodie principale »
-  « fais monter progressivement l'énergie pendant les 16 prochaines mesures »
-  « rends mon drop plus puissant sans modifier la ligne de basse »   (FINISH écrit un DROP 2 renforcé, ton drop reste intact)
-  « ajoute des variations de drums en conservant mon groove »
-  « crée une transition plus fluide entre le break et le drop »
-  « propose trois versions différentes de mon build-up »             (puis V1 / V2 / V3)
-  « écoute et analyse ce que j'ai déjà créé, puis dis-moi ce qui manque »
-  « analyse mon mix et explique-moi pourquoi il manque de punch »
-  « améliore le mastering en conservant le caractère sombre »
-  puis : « plus subtil », « plus sombre », « garde la version précédente », « modifie uniquement la basse », « envoie dans Live »,
-  « annule l'envoi », « quels sont mes sons », « fais-moi écouter dans Live ».  Bouton JOURNAL : tout ce qui a été analysé, généré, envoyé, et ce qui reste à faire.
-
-MASTERING (page MASTER)
-  Joue ton morceau (au moins 20 s, idéalement le passage le plus fort) : FINISH mesure ton mix en continu
-  (équilibre en 7 zones, crêtes, dynamique, stéréo et compatibilité mono, saturation) et ne corrige que ce qui sort des repères.
-  - Cible : MÊME NIV. (corrige sans monter le volume), STREAM -14, BALANCED -11, CLUB -9, LOUD -7. Par défaut FINISH
-    choisit MÊME NIV. si ton mix est déjà assez fort : jamais plus fort « par principe ».
-  - Profil AUTO / PUNCH / CHAUD (garde le caractère sombre) / OUVERT, et INTENSITÉ.
-  - ANALYSE (en haut à droite de l'écran) : ce qui a été mesuré, ce qui a été fait et pourquoi, tableau AVANT -> APRÈS.
-  - MATCH : l'A/B compare à volume égal (sinon le plus fort paraît toujours meilleur).
-  - Charge une référence (REFERENCE) pour comparer à un morceau que tu aimes au lieu des repères génériques.
-
-SANS ABLETON LIVE (FL Studio...)
-  Page ESQUISSE : FINISH écoute ton morceau et propose des parties en MIDI à glisser dans ton DAW, ou EXPORT dans Musique/FINISH.
+La baleine : elle remonte vers la surface (la cible de volume) pendant le mastering, se dédouble s'il y a un problème
+de phase, devient orange si c'est trop fort, et souffle des étoiles quand le master est validé.
+Menu ≡ > Animations réduites pour les ordinateurs moins puissants.
