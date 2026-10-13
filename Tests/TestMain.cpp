@@ -264,9 +264,16 @@ namespace
             CHECK (AutoMaster::lowCutResponseDb (rr.base.lowCut, 63.0f) > -1.0f, "the kick (63 Hz) is kept");
         }
         // Style detection by tempo
-        CHECK (AutoMaster::detectStyle (f, 174.0) == styleDnb, "174 BPM -> Drum & Bass");
+        CHECK (AutoMaster::detectStyle (featuresFromProfile (AutoMaster::profile (styleDnb)), 174.0) == styleDnb, "DnB curve at 174 BPM -> Drum & Bass");
         CHECK (AutoMaster::detectStyle (f, 155.0) == styleHardTechno, "155 BPM -> Hard Techno");
-        CHECK (AutoMaster::detectStyle (f, 85.0) == styleLofi, "85 BPM -> Lo-fi");
+        {
+            auto lofiF = featuresFromProfile (AutoMaster::profile (styleLofi)); lofiF.highRatio = 0.01f; lofiF.plr = 13.0f;
+            CHECK (AutoMaster::detectStyle (lofiF, 85.0) == styleLofi, "dark, dynamic, 85 BPM -> Lo-fi");
+            auto at = featuresFromProfile (AutoMaster::profile (styleAfroTech));
+            CHECK (AutoMaster::detectStyle (at, 128.0) == styleAfroTech, "Afro Tech curve at 128 BPM -> Afro Tech / Riddim");
+            auto af = featuresFromProfile (AutoMaster::profile (styleAfro));
+            CHECK (AutoMaster::detectStyle (af, 122.0) == styleAfro, "Afro House curve at 122 BPM -> Afro / Latin House");
+        }
         CHECK (AutoMaster::detectStyle (f, 126.0) == styleTechHouse || AutoMaster::detectStyle (f, 126.0) == styleAfro, "126 BPM -> house family");
         auto lf = AutoMaster::compute (featuresFromProfile (AutoMaster::profile (styleLofi)), styleLofi, 85.0, styleTarget, -1.0f);
         CHECK (lf.base.clipAmt <= 0.2f && lf.base.compGlue < 0.3f && lf.loudPassageTarget < -10.0f, "lo-fi: soft target, light clipper at most");

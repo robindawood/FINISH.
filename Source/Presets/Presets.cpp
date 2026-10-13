@@ -33,7 +33,8 @@ namespace
           0, 0, 0.8f, 0.3f, 0.2f, 0.2f, 0.4f, 0.3f,  0.30f, 0.25f, 0.55f, 0.15f, 0.3f, 130, 0.5f, 0.8f, 0.30f },
         { "Sunset Edit", "Doux et large pour les edits et les voix", styleAfro, styleTarget, -1.0f,
           -0.5f, 0.5f, -0.8f, -0.5f, 0.3f, 0.2f, 0.5f, 0.4f,  0.30f, 0.05f, 0.60f, 0.25f, 1.0f, 120, 0.5f, 0, 0.20f },
-        { "Afro Tech", "Plus serré et plus fort, pour les peak times", styleAfro, 3, -1.0f,
+        // ---- Afro Tech / Riddim (this one was in Afro before the style existed: it keeps its place in the list)
+        { "Afro Tech", "Plus serré et plus fort, pour les peak times", styleAfroTech, 3, -1.0f,
           0, -0.8f, 0.5f, 0, 0.4f, 0.3f, 0.4f, 0.3f,  0.45f, 0.30f, 0.45f, 0.20f, 0.0f, 140, 0.5f, 0.8f, 0.45f },
         // ---- Hard Techno / Rave
         { "Rave Hammer", "Kick dur et compact, très fort", styleHardTechno, styleTarget, -0.5f,
@@ -72,6 +73,11 @@ namespace
           0, -0.5f, 0, 0, 0.2f, 0.2f, 0.3f, 0.2f,  0.25f, 0.15f, 0.60f, 0.10f, 0.0f, 120, 0, 0.3f, 0.15f },
         { "Demo Rapide", "Juste fort et propre pour envoyer une démo", styleTechHouse, 3, -1.0f,
           0, -0.5f, 0.3f, 0, 0.3f, 0.3f, 0.3f, 0.3f,  0.40f, 0.25f, 0.50f, 0.15f, 0.0f, 140, 0, 0.5f, 0.45f },
+        // ---- Afro Tech / Riddim (appended: existing preset numbers stay the same)
+        { "Riddim Pressure", "Sub tenu, kick serré, bas-médium allégé, fort", styleAfroTech, styleTarget, -1.0f,
+          0.5f, -1.0f, 0.3f, 0.3f, 0.4f, 0.3f, 0.4f, 0.3f,  0.45f, 0.35f, 0.45f, 0.20f, 0.0f, 150, -0.5f, 1.0f, 0.55f },
+        { "Afro Tech Percu", "Percussions vives et aérées, groove ouvert", styleAfroTech, styleTarget, -1.0f,
+          0, -0.8f, 0.5f, 0.5f, 0.3f, 0.3f, 0.5f, 0.4f,  0.35f, 0.40f, 0.55f, 0.15f, 0.5f, 140, 0, 1.2f, 0.45f },
     };
 }
 

@@ -55,16 +55,16 @@ namespace PID
 inline const juce::StringArray& styleNames()
 {
     static const juce::StringArray n { juce::String (juce::CharPointer_UTF8 ("Auto (d\xc3\xa9tection)")), "Tech House / House", "Afro / Latin House",
-                                       "Hard Techno / Rave", "Drum & Bass", "UK Garage / Bass", "Lo-fi / Chill" };
+                                       "Hard Techno / Rave", "Drum & Bass", "UK Garage / Bass", "Lo-fi / Chill", "Afro Tech / Riddim" };
     return n;
 }
 inline const juce::StringArray& styleShortNames()
 {
-    static const juce::StringArray n { "AUTO", "TECH HOUSE", "AFRO HOUSE", "HARD TECHNO", "DNB", "UK GARAGE", "LO-FI" };
+    static const juce::StringArray n { "AUTO", "TECH HOUSE", "AFRO HOUSE", "HARD TECHNO", "DNB", "UK GARAGE", "LO-FI", "AFRO TECH" };
     return n;
 }
-inline constexpr int numStyles = 7;
-inline constexpr int styleAuto = 0, styleTechHouse = 1, styleAfro = 2, styleHardTechno = 3, styleDnb = 4, styleUkg = 5, styleLofi = 6;
+inline constexpr int numStyles = 8;   // append only: projects and presets store the index
+inline constexpr int styleAuto = 0, styleTechHouse = 1, styleAfro = 2, styleHardTechno = 3, styleDnb = 4, styleUkg = 5, styleLofi = 6, styleAfroTech = 7;
 
 // Loudness targets. "Style" = the loud-passage loudness measured on the style's reference masters.
 struct LoudnessTarget { const char* name; const char* shortName; float lufs; };

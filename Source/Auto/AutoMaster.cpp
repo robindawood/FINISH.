@@ -12,7 +12,7 @@ namespace
 
 const StyleProfileData& AutoMaster::profile (int style) noexcept
 {
-    return styleProfileData[juce::jlimit (0, 5, style - 1)];
+    return styleProfileData[juce::jlimit (0, numStyles - 2, style - 1)];
 }
 
 double AutoMaster::estimateTempo (const std::vector<float>& low, const std::vector<float>& high, double rate)
@@ -66,23 +66,83 @@ double AutoMaster::estimateTempo (const std::vector<float>& low, const std::vect
     return bestBpm;
 }
 
+namespace
+{
+    // Distance of a mix's 1/3-octave curve to a style's references: part outside the references' own spread
+    // (no "provisional" widening here, so small profiles do not win by default).
+    float styleDistance (const AudioFeatures& f, const StyleProfileData& p)
+    {
+        constexpr int n = 29;
+        float mix[n], am = 0, ap = 0;
+        for (int b = 0; b < n; ++b)
+        {
+            const int l = std::max (0, b - 1), r = std::min (n - 1, b + 1);
+            mix[b] = 0.25f * f.thirdOctDb[l] + 0.5f * f.thirdOctDb[b] + 0.25f * f.thirdOctDb[r];
+        }
+        for (int b = 9; b <= 23; ++b) { am += mix[b]; ap += p.thirdOctMedian[b]; }
+        am /= 15.0f; ap /= 15.0f;
+        double se = 0, sw = 0;
+        for (int b = 0; b < n; ++b)
+        {
+            const float dev = (mix[b] - am) - (p.thirdOctMedian[b] - ap);
+            const float tol = juce::jlimit (1.0f, 3.0f, 0.5f * (p.thirdOctP75[b] - p.thirdOctP25[b]));
+            const float w = b == 0 ? 0.3f : b == 1 ? 0.5f : b <= 3 ? 0.75f : b == 27 ? 0.6f : b == 28 ? 0.25f : 1.0f;
+            const float ex = std::max (0.0f, std::abs (dev) - tol);
+            se += w * ex * ex; sw += w;
+        }
+        return (float) std::sqrt (se / sw);
+    }
+
+    // Tempo ranges where each style lives (BPM as estimateTempo reports it: 100-200, half-time grooves doubled).
+    float tempoOutside (int style, double bpm)
+    {
+        struct R { float lo, hi; };
+        auto out = [bpm] (std::initializer_list<R> rs)
+        {
+            float best = 1.0e9f;
+            for (auto r : rs) best = std::min (best, bpm < r.lo ? (float) (r.lo - bpm) : bpm > r.hi ? (float) (bpm - r.hi) : 0.0f);
+            return best;
+        };
+        switch (style)
+        {
+            case styleTechHouse:  return out ({ { 115, 135 } });
+            case styleAfro:       return out ({ { 112, 132 } });
+            case styleHardTechno: return out ({ { 140, 165 } });
+            case styleDnb:        return out ({ { 160, 190 } });
+            case styleUkg:        return out ({ { 128, 145 } });
+            case styleLofi:       return out ({ { 60, 100 }, { 120, 200 } });
+            case styleAfroTech:   return out ({ { 100, 150 } });
+            default:              return 0.0f;
+        }
+    }
+}
+
 int AutoMaster::detectStyle (const AudioFeatures& f, double bpm)
 {
-    // Slow, soft groove (or a dark mix with no host tempo): lo-fi.
+    if (f.hasSpectrum)
+    {
+        // Spectral distance to each style's references + tempo plausibility (0.15 per BPM outside the style's range).
+        // Lo-fi only for a dark, dynamic master. Leave-one-out on the 60 reference masters: 45/60, every Afro Tech
+        // found; the rest are house-family neighbours (Tech House / Afro), which sound close anyway.
+        int best = styleTechHouse;
+        float bestScore = 1.0e9f;
+        for (int st = 1; st < numStyles; ++st)
+        {
+            float score = styleDistance (f, profile (st));
+            if (bpm > 0) score += 0.15f * tempoOutside (st, bpm);
+            if (st == styleLofi && ! (f.highRatio < 0.02f && f.plr > 10.0f)) score += 5.0f;
+            if (score < bestScore) { bestScore = score; best = st; }
+        }
+        return best;
+    }
+
+    // Without the spectrum (older callers): tempo decides the family, the band ratios pick inside it.
     if (bpm > 0 && bpm < 105) return styleLofi;
     if (bpm <= 0 && f.highRatio < 0.012f && f.plr > 13.0f) return styleLofi;
-
-    // Tempo decides the family, the spectral balance picks inside it.
-    // A lo-fi groove read in double time lands at 160-190: its dark top end gives it away.
     if (bpm >= 150 && bpm <= 190 && f.highRatio < 0.012f && f.plr > 11.0f) return styleLofi;
     if (bpm >= 165 && bpm <= 190) return styleDnb;
     if (bpm >= 145 && bpm < 165) return styleHardTechno;
     if (bpm >= 136 && bpm < 145) return (f.subRatio < 0.45f || f.lowMidRatio > 0.4f) ? styleUkg : styleTechHouse;
-
-    // House family (or unknown tempo): nearest of Tech House / Afro House. With the 1/3-octave curve: distance to
-    // each style's references outside their tolerance (robust to one region being off, e.g. a boomy mix).
-    if (f.hasSpectrum)
-        return analyseTone (f, profile (styleAfro), 1.0f).error < analyseTone (f, profile (styleTechHouse), 1.0f).error ? styleAfro : styleTechHouse;
     auto dist = [&] (int st)
     {
         const auto& p = profile (st);
