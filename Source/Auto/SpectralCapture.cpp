@@ -133,7 +133,7 @@ void SpectralCapture::pull()
             if (std::isnan (l)) { breakContinuity(); ++gaps; continue; }
             midBuf.push_back (0.5f * (l + r));
             sideBuf.push_back (0.5f * (l - r));
-            trackTruePeak (l, r);
+            if (tpOn) trackTruePeak (l, r);
         }
     };
     take (s1, n1);

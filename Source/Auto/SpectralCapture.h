@@ -24,7 +24,8 @@ public:
     void prepare (double sampleRate);
     void start();                 // message thread: clears and arms the capture
     void stop() { active.store (false); }                 // also used as 'pause': resume() continues the same measurement
-    void resume();                // message thread: continue after a pause (the audio before the gap is not joined to the next)
+    void resume();
+    void setTrackTruePeak (bool on) { tpOn = on; }              // live meter: no need (it is costly)                // message thread: continue after a pause (the audio before the gap is not joined to the next)
     bool isActive() const { return active.load(); }
 
     void push (const float* L, const float* R, int n) noexcept;   // audio thread
@@ -68,6 +69,7 @@ private:
     static constexpr int tpTaps = 32;
     float tpCoef[4][tpTaps] {};
     float tpHist[2][tpTaps] {};
-    int tpPos = 0, tpWarm = 0;              // after a (re)start the interpolator must fill before it measures
+    int tpPos = 0, tpWarm = 0;
+    bool tpOn = true;              // after a (re)start the interpolator must fill before it measures
     float tpMax = 0, spMax = 0;
 };

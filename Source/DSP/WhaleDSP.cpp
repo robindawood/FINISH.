@@ -43,10 +43,14 @@ void WhaleDSP::prepare (double sampleRate, int maxBlockSize, int numChannels)
     kFastAtt = envCoeff (sr, 0.0008); kFastRel = envCoeff (sr, 0.045);
     kSlowAtt = envCoeff (sr, 0.030);  kSlowRel = envCoeff (sr, 0.250);
     punchSmooth = envCoeff (sr, 0.0015);
-    satPre.setLowShelf (sr * 4.0, 250.0, 4.5);     // stage B runs x4 oversampled
-    satEnvCoef = envCoeff (sr * 4.0, 0.3); satEnv = 0.0f;
-    satSplit.setLowPass (sr * 4.0, 1500.0, 0.7071);
-    satPost.setLowShelf (sr * 4.0, 250.0, -4.5);
+    // stage B runs oversampled: x4 up to 48 kHz, x2 above (already 176-384 kHz inside, enough headroom for the
+    // harmonics of the saturation and the clipper, and half the cost)
+    const int osOrder = sr > 64000.0 ? 1 : 2;
+    const double osRate = sr * (double) (1 << osOrder);
+    satPre.setLowShelf (osRate, 250.0, 4.5);
+    satEnvCoef = envCoeff (osRate, 0.3); satEnv = 0.0f;
+    satSplit.setLowPass (osRate, 1500.0, 0.7071);
+    satPost.setLowShelf (osRate, 250.0, -4.5);
     for (auto* b : { &xLow1a, &xLow1b }) b->setLowPass (sr, 120.0, 0.7071);
     for (auto* b : { &xHigh1a, &xHigh1b }) b->setHighPass (sr, 120.0, 0.7071);
     for (auto* b : { &xLow2a, &xLow2b, &apLowA }) b->setLowPass (sr, 4000.0, 0.7071);
@@ -57,7 +61,7 @@ void WhaleDSP::prepare (double sampleRate, int maxBlockSize, int numChannels)
     lastDetail = -1.0f;
 
     // Oversampling x4 (polyphase IIR, integer latency) for saturation + clipper
-    os = std::make_unique<juce::dsp::Oversampling<float>> (2, 2, juce::dsp::Oversampling<float>::filterHalfBandFIREquiripple, true, true);   // linear phase: transparent when idle
+    os = std::make_unique<juce::dsp::Oversampling<float>> (2, (size_t) osOrder, juce::dsp::Oversampling<float>::filterHalfBandFIREquiripple, true, true);   // linear phase: transparent when idle
     os->initProcessing ((size_t) maxBlock);
     osLatency = (int) std::round (os->getLatencyInSamples());
 
@@ -370,13 +374,16 @@ void WhaleDSP::stageA (float* L, float* R, int n, const Settings&) noexcept
                 // kick tails). The dip is what survives the limiter: at the same loudness the kicks stand out and the
                 // low end gets tighter. REST, driven by the broadband transients (snare, clap): lift on the hits,
                 // light dip on the tails, so the hats and the air do not duck.
-                const float kr = (kFast + 1.0e-6f) / (kSlow + 1.0e-6f), br = (fastEnv + 1.0e-6f) / (slowEnv + 1.0e-6f);
-                float lowDb = kr > 1.0f ? std::min (2.0f, 3.0f * std::log2 (kr)) : std::max (-10.0f, 14.0f * std::log2 (std::max (kr, 0.05f)));
-                float restDb = br > 1.0f ? std::min (4.0f, 6.0f * std::log2 (br)) : std::max (-2.5f, 4.0f * std::log2 (std::max (br, 0.05f)));
-                if (kr < 1.0f) restDb = std::min (restDb, 0.0f);   // no lift on the rest while the kick tail is being lowered
-                const float tl = dbToGain (lowDb * punch), th = dbToGain (restDb * punch);
-                punchGain = punchSmooth * punchGain + (1 - punchSmooth) * tl;
-                punchGainHi = punchSmooth * punchGainHi + (1 - punchSmooth) * th;
+                if ((++punchCounter & 7) == 0)       // gain targets every 8 samples (the 1.5 ms smoothing interpolates)
+                {
+                    const float kr = (kFast + 1.0e-6f) / (kSlow + 1.0e-6f), br = (fastEnv + 1.0e-6f) / (slowEnv + 1.0e-6f);
+                    float lowDb = kr > 1.0f ? std::min (2.0f, 3.0f * std::log2 (kr)) : std::max (-10.0f, 14.0f * std::log2 (std::max (kr, 0.05f)));
+                    float restDb = br > 1.0f ? std::min (4.0f, 6.0f * std::log2 (br)) : std::max (-2.5f, 4.0f * std::log2 (std::max (br, 0.05f)));
+                    if (kr < 1.0f) restDb = std::min (restDb, 0.0f);   // no lift on the rest while the kick tail is being lowered
+                    punchTargetLo = dbToGain (lowDb * punch); punchTargetHi = dbToGain (restDb * punch);
+                }
+                punchGain = punchSmooth * punchGain + (1 - punchSmooth) * punchTargetLo;
+                punchGainHi = punchSmooth * punchGainHi + (1 - punchSmooth) * punchTargetHi;
                 l = lowL * punchGain + (l - lowL) * punchGainHi;
                 r = lowR * punchGain + (r - lowR) * punchGainHi;
             }
@@ -455,6 +462,9 @@ void WhaleDSP::stageB (juce::dsp::AudioBlock<float>& block, const Settings&) noe
     const float sat1 = sSat.getCurrentValue(), clip1 = sClip.getCurrentValue();
     const float drv1 = sDrive.getCurrentValue(), ceil1 = sCeil.getCurrentValue();
 
+    const float drvG0 = dbToGain (drv0), drvG1 = dbToGain (drv1), ceilG0 = dbToGain (ceil0), ceilG1 = dbToGain (ceil1);
+    const float satA0 = dbToGain (7.5f * sat0), satA1 = dbToGain (7.5f * sat1);
+    const float clipK0 = dbToGain (-3.5f * clip0), clipK1 = dbToGain (-3.5f * clip1);
     auto up = os->processSamplesUp (block);
     const int m = (int) up.getNumSamples();
     float maxRatio = 1.0f;
@@ -464,8 +474,8 @@ void WhaleDSP::stageB (juce::dsp::AudioBlock<float>& block, const Settings&) noe
         const float t = (float) i / (float) m;
         const float sat = sat0 + t * (sat1 - sat0);
         const float clip = clip0 + t * (clip1 - clip0);
-        const float drive = dbToGain (drv0 + t * (drv1 - drv0));
-        const float ceil = dbToGain (ceil0 + t * (ceil1 - ceil0));
+        const float drive = drvG0 + t * (drvG1 - drvG0);        // linear ramp of the gains (no pow per sample)
+        const float ceil = ceilG0 + t * (ceilG1 - ceilG0);
         // SATURATION, relative to the mix's own loud level (so it works the same whatever the input level and never
         // caps the master level): a linked 300 ms RMS envelope sets the reference, the peaks (about 3x the RMS) are
         // driven up to +7.5 dB into an asymmetric tanh (even + odd harmonics, soft density), then brought back.
@@ -484,7 +494,7 @@ void WhaleDSP::stageB (juce::dsp::AudioBlock<float>& block, const Settings&) noe
         if (sat > 1.0e-4f)
         {
             const float ref = 3.0f * std::sqrt (std::max (satEnv, 1.0e-10f));
-            const float a = dbToGain (7.5f * sat), bias = 0.18f * sat;
+            const float a = satA0 + t * (satA1 - satA0), bias = 0.18f * sat;
             const float tb = std::tanh (bias), nrm = 1.0f / (1.0f - tb * tb);
             for (int c = 0; c < 2; ++c)
                 y[c] = (std::tanh (a * y[c] / ref + bias) - tb) * nrm / a * ref;
@@ -494,7 +504,7 @@ void WhaleDSP::stageB (juce::dsp::AudioBlock<float>& block, const Settings&) noe
             float v = (satPost.process (y[c], c) + rest[c]) * drive;   // inverse of the pre-emphasis, rest added back
             if (clip > 1.0e-4f)
             {
-                const float knee = ceil * dbToGain (-3.5f * clip), top = ceil * dbToGain (0.5f);
+                const float knee = ceil * (clipK0 + t * (clipK1 - clipK0)), top = ceil * 1.0592537f;   // +0.5 dB
                 const float av = std::abs (v);
                 if (av > knee)
                 {
@@ -609,14 +619,22 @@ void WhaleDSP::stageC (float* L, float* R, int n, const Settings& s) noexcept
             const float h0 = kHeard.process (ol, 0), h1 = kHeard.process (orr, 1);
             pHeardShort = shortCoef * pHeardShort + (1 - shortCoef) * (h0 * h0 + h1 * h1);
             tpmHist[0][tpmPos] = ol; tpmHist[1][tpmPos] = orr;
-            for (int c = 0; c < 2; ++c)
-                for (int ph = 0; ph < 4; ++ph)
-                {
-                    float acc = 0;
-                    int idx = tpmPos;
-                    for (int k = 0; k < tpTaps; ++k) { acc += tpCoef[ph][k] * tpmHist[c][idx]; if (--idx < 0) idx = tpTaps - 1; }
-                    blockTpHeard = std::max (blockTpHeard, std::abs (acc));
-                }
+            // inter-sample peaks only happen around large samples: interpolate only there (the history of the
+            // interpolator is a delay line, the peak lies tpTaps/2 samples back)
+            const float sp = std::max (std::abs (ol), std::abs (orr));
+            tpmRecent = std::max (sp, tpmRecent * 0.98f);
+            if (tpmRecent > 0.5f * std::max (blockTpHeard, tpmFloor))
+            {
+                for (int c = 0; c < 2; ++c)
+                    for (int ph = 0; ph < 4; ++ph)
+                    {
+                        float acc = 0;
+                        int idx = tpmPos;
+                        for (int k = 0; k < tpTaps; ++k) { acc += tpCoef[ph][k] * tpmHist[c][idx]; if (--idx < 0) idx = tpTaps - 1; }
+                        blockTpHeard = std::max (blockTpHeard, std::abs (acc));
+                    }
+            }
+            blockTpHeard = std::max (blockTpHeard, sp);
             if (++tpmPos >= tpTaps) tpmPos = 0;
             const float bm = bassMidLp.process (0.5f * (ol + orr), 0), bs = bassSideLp.process (0.5f * (ol - orr), 0);
             accBassMid = statCoef * accBassMid + (1 - statCoef) * bm * bm;
@@ -649,6 +667,7 @@ void WhaleDSP::stageC (float* L, float* R, int n, const Settings& s) noexcept
     grDb.store (std::max (grDb.load(), blockGr));
     for (int k = 0; k < 3; ++k) bandGrOut[(size_t) k].store (bandGr[k]);
     for (int b = 0; b < 4; ++b) specDynOut[(size_t) b].store (specCut[b]);
+    tpmFloor = 0.999f * tpmFloor + 0.001f * blockTpHeard;               // slow memory of the recent peaks
     peakHoldDb = std::max (peakHoldDb, gainToDb (blockTpHeard));      // meters: TRUE peak of what is heard
     truePeakDb.store (std::max (truePeakDb.load(), peakHoldDb));
     heardLufs.store (powerToLufs (pHeardShort));

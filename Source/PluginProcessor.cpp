@@ -43,7 +43,7 @@ void WhaleAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     outAnalyzer.prepare (sampleRate);
     inCap.prepare (sampleRate);
     outCap.prepare (sampleRate);
-    liveCap.prepare (sampleRate); liveCap.start();
+    liveCap.prepare (sampleRate); liveCap.setTrackTruePeak (false); liveCap.start();
     toneDistance.store (-1.0f);
     setLatencySamples (dsp.getLatencySamples());
 }

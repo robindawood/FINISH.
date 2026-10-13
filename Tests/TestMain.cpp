@@ -150,6 +150,21 @@ namespace
         bool finite = true;
         for (int c = 0; c < 2; ++c) for (int i = 0; i < all.getNumSamples(); ++i) finite &= std::isfinite (all.getSample (c, i));
         CHECK (finite, "no NaN / inf");
+        // 96 kHz (oversampling x2 there): same guarantee
+        {
+            WhaleDSP d96; d96.prepare (96000.0, block, 2);
+            juce::AudioBuffer<float> all96 (2, (int) (6 * 96000)), b96 (2, block);
+            MixGen g96; g96.gainDb = -6.0f;
+            for (int k = 0; k * block + block <= all96.getNumSamples(); ++k)
+            {
+                g96.fill (b96);
+                d96.process (b96, s);
+                for (int c = 0; c < 2; ++c) all96.copyFrom (c, k * block, b96, c, 0, block);
+            }
+            const float tp96 = truePeakDb (all96);
+            std::cout << "    96 kHz true peak " << tp96 << " dBTP\n";
+            CHECK (tp96 <= -0.9f, "96 kHz: output true peak <= ceiling");
+        }
     }
 
     void testLoudnessLoopAndAB()
@@ -621,6 +636,48 @@ int main (int argc, char** argv)
     juce::StringArray args;
     for (int i = 1; i < argc; ++i) args.add (juce::String::fromUTF8 (argv[i]));
 
+    if (args[0] == "--cpu")
+    {
+        // real-time cost of the whole processor (DSP + analyzers + live meters), worst case: every module on
+        const bool one = args[1].isNotEmpty();
+        const double seconds = one ? 4.0 : 20.0;
+        for (double rate : { 44100.0, 48000.0, 96000.0, 192000.0 })
+            for (int blk : { 64, 512 })
+            {
+                if (one && (rate != args[1].getDoubleValue() || blk != 512)) continue;
+                WhaleAudioProcessor p;
+                p.setRateAndBufferSizeDetails (rate, blk);
+                p.prepareToPlay (rate, blk);
+                setParam (p, PID::style, (float) styleTechHouse);
+                for (int k = 0; k < 4; ++k) { setParam (p, PID::specGain[k], 2.0f); setParam (p, PID::specDyn[k], 0.6f); }
+                setParam (p, PID::compGlue, 0.5f); setParam (p, PID::compPunch, 0.6f); setParam (p, PID::satDrive, 0.5f);
+                setParam (p, PID::clipAmt, 0.6f); setParam (p, PID::widthMono, 140.0f); setParam (p, PID::toneLow, 2.0f);
+                setParam (p, PID::toneAir, 2.0f); setParam (p, PID::lowCut, 30.0f);
+                MixGen gen; gen.gainDb = -14.0f;
+                juce::AudioBuffer<float> b (2, blk); juce::MidiBuffer midi;
+                const int nBlocks = (int) (seconds * rate / blk);
+                std::vector<juce::AudioBuffer<float>> pre;   // generate first: only the plug-in is timed
+                double audioT = 0, msgT = 0, acc = 0;
+                for (int k = 0; k < nBlocks; ++k)
+                {
+                    gen.fill (b);
+                    const auto t0 = juce::Time::getHighResolutionTicks();
+                    p.processBlock (b, midi);
+                    audioT += juce::Time::highResolutionTicksToSeconds (juce::Time::getHighResolutionTicks() - t0);
+                    acc += blk / rate;
+                    if (acc >= 1.0 / 30.0)
+                    {
+                        acc = 0;
+                        const auto t1 = juce::Time::getHighResolutionTicks();
+                        TestAccess::pump (p);
+                        msgT += juce::Time::highResolutionTicksToSeconds (juce::Time::getHighResolutionTicks() - t1);
+                    }
+                }
+                std::cout << "  " << rate / 1000.0 << " kHz, block " << blk << ": audio thread " << juce::String (100.0 * audioT / seconds, 1)
+                          << " % of one core, message thread " << juce::String (100.0 * msgT / seconds, 1) << " %\n";
+            }
+        return 0;
+    }
     if (args[0] == "--snap") { runSnapshots (juce::File::getCurrentWorkingDirectory().getChildFile (args[1]), args[2]); return failures; }
     if (args[0] == "--render") { renderFile (juce::File::getCurrentWorkingDirectory().getChildFile (args[1]), juce::File::getCurrentWorkingDirectory().getChildFile (args[2]), args[3].isEmpty() ? 0 : args[3].getIntValue()); return failures; }
 

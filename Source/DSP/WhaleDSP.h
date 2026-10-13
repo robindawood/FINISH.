@@ -85,7 +85,8 @@ private:
     float fastEnv = 0, slowEnv = 0, fastAtt = 0, fastRel = 0, slowAtt = 0, slowRel = 0;
     // PUNCH v2: kick-band detector (< 150 Hz) + broadband detector; boosts the attack and lowers the sustain
     Biquad punchLp, punchSplit;
-    float kFast = 0, kSlow = 0, kFastAtt = 0, kFastRel = 0, kSlowAtt = 0, kSlowRel = 0, punchGain = 1.0f, punchGainHi = 1.0f, punchSmooth = 0;
+    float kFast = 0, kSlow = 0, kFastAtt = 0, kFastRel = 0, kSlowAtt = 0, kSlowRel = 0, punchGain = 1.0f, punchGainHi = 1.0f, punchSmooth = 0, punchTargetLo = 1.0f, punchTargetHi = 1.0f;
+    int punchCounter = 0;
     // SATURATION v2 (oversampled): pre-emphasis low shelf (lows saturate more than highs), inverse after
     Biquad satPre, satPost, satSplit;
     float satEnv = 0.0f, satEnvCoef = 0.0f;
@@ -148,6 +149,7 @@ private:
     float pHeardShort = 0;
     float tpmHist[2][tpTaps] {};
     int tpmPos = 0;
+    float tpmRecent = 0.0f, tpmFloor = 0.0f;
     Biquad bassMidLp, bassSideLp;
     float accBassMid = 0, accBassSide = 0;
     std::atomic<float> heardLufs { -70.0f }, bassMonoOut { 1.0f };

@@ -310,7 +310,7 @@ void WhaleEditor::timerCallback()
     in.lufsText = lufsSmooth > -60 ? juce::String (lufsSmooth, 1) : "--";
     const int tIdx = (int) proc.state.getRawParameterValue (PID::target)->load();
     const float tgt = proc.getEffectiveTarget() + 6.0f * (knobs[7]->slider.getValue() - 0.5f);
-    in.targetText = proc.isTargetLoudnessMode() ? fr ("CIBLE ") + juce::String (tgt, 1) + " LUFS (" + (tIdx == styleTarget ? styleShortNames()[proc.getActiveStyle()] : juce::String (loudnessTargets[tIdx].shortName)) + ")"
+    in.targetText = proc.isTargetLoudnessMode() ? fr ("CIBLE DES DROPS ") + juce::String (tgt, 1) + " LUFS (" + (tIdx == styleTarget ? styleShortNames()[proc.getActiveStyle()] : juce::String (loudnessTargets[tIdx].shortName)) + ")"
                                                 : juce::String (loudnessTargets[tIdx].shortName);
     in.meter = juce::jlimit (0.0f, 1.0f, (lufsSmooth + 30.0f) / 26.0f);
     if (st == WhaleAudioProcessor::AutoState::listening)

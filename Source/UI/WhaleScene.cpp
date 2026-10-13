@@ -356,7 +356,7 @@ void WhaleScene::drawHud (juce::Graphics& g)
     g.drawText (in.lufsText, juce::Rectangle<float> (w - 330, 14, 300, 46), juce::Justification::centredRight);
     g.setColour (dim);
     g.setFont (mono (10.5f, 0.06f));
-    g.drawText (fr ("LUFS (PASSAGES FORTS)  ·  ") + in.targetText, juce::Rectangle<float> (w - 430, 60, 400, 14), juce::Justification::centredRight);
+    g.drawText (fr ("LUFS COURT TERME (3 s)  ·  ") + in.targetText, juce::Rectangle<float> (w - 430, 60, 400, 14), juce::Justification::centredRight);
     // verdict badge
     {
         g.setFont (bold (13.5f));
