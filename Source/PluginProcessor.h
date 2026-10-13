@@ -46,6 +46,9 @@ public:
     // ---- AUTO
     enum class AutoState { idle, listening, verifying, done };
     void toggleAuto();                          // start, or cancel while running
+    // After AUTO: back to exactly what was there before it (settings, macros, preset, target), in one click.
+    bool canUndoAuto() const { return undo.valid; }
+    void undoAuto();
     AutoState getAutoState() const { return autoState; }
     float getAutoProgress() const;              // 0..1 over listening + verifying
     bool isWaitingForAudio() const { return autoState == AutoState::listening && waitingForAudio; }
@@ -132,7 +135,18 @@ private:
     ModuleBase correction;                    // AUTO's decision (the corrective layer)
     float correctionCurve[29] {};             // response of its EQ tools
     bool haveCorrection = false;
-    ModuleBase prevCorrection; float prevCurve[29] {}; bool prevHave = false;   // restored if AUTO is cancelled
+    struct UndoSnapshot
+    {
+        bool valid = false;
+        ModuleBase base, correction;
+        float macros[8] {}, curve[29] {}, charCurve[29] {};
+        bool haveCorrection = false, haveAutoTarget = false;
+        int characterIndex = -1, presetCurrent = -1;
+        float autoLoudTarget = 0, inLoudRef = -100.0f;
+        AutoResult result;
+        AutoState state = AutoState::idle;
+    } undo;
+    void takeUndoSnapshot();
     int characterIndex = -1;                  // factory preset used as character (-1 = none)
     float charCurve[29] {};
     void rebuildLayers();                     // writes correction (+) character to the parameters

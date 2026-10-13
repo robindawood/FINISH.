@@ -175,10 +175,7 @@ void WhaleAudioProcessor::toggleAuto()
     if (autoState == AutoState::verifying)
     {
         inCap.stop(); outCap.stop();
-        writeBase (beforeAuto);   // cancel: back to the settings before AUTO
-        correction = prevCorrection; haveCorrection = prevHave;
-        std::copy (prevCurve, prevCurve + 29, correctionCurve);
-        autoState = AutoState::idle;
+        undoAuto();               // cancel: back to everything as it was before AUTO
         return;
     }
     autoSession.clear();
@@ -279,6 +276,7 @@ void WhaleAudioProcessor::applyPreset (int index)
 
 void WhaleAudioProcessor::resetToNeutral()
 {
+    undo.valid = false;
     haveCorrection = false;
     characterIndex = -1;
     writeBase (ModuleBase());
@@ -541,6 +539,43 @@ AudioFeatures WhaleAudioProcessor::estimateProcessed() const
     return est;
 }
 
+void WhaleAudioProcessor::takeUndoSnapshot()
+{
+    auto& u = undo;
+    u.base = readBase();
+    for (int i = 0; i < 8; ++i) u.macros[i] = pM[i]->load();
+    u.correction = correction; u.haveCorrection = haveCorrection;
+    std::copy (correctionCurve, correctionCurve + 29, u.curve);
+    u.characterIndex = characterIndex;
+    std::copy (charCurve, charCurve + 29, u.charCurve);
+    u.presetCurrent = presets.getCurrent();
+    u.haveAutoTarget = haveAutoTarget; u.autoLoudTarget = autoLoudTarget; u.inLoudRef = autoInputLoudRef.load();
+    u.result = autoResult;
+    u.state = autoState == AutoState::listening ? (autoResult.valid ? AutoState::done : AutoState::idle) : autoState;
+    u.valid = true;
+}
+
+void WhaleAudioProcessor::undoAuto()
+{
+    if (! undo.valid) { autoState = AutoState::idle; return; }
+    auto& u = undo;
+    inCap.stop(); outCap.stop();
+    writeBase (u.base);
+    const char* macroIds[8] = { PID::mGlue, PID::mPunch, PID::mWarmth, PID::mAir, PID::mWidth, PID::mBass, PID::mDetail, PID::mLoud };
+    for (int i = 0; i < 8; ++i)
+        if (auto* prm = state.getParameter (macroIds[i])) prm->setValueNotifyingHost (prm->convertTo0to1 (u.macros[i]));
+    correction = u.correction; haveCorrection = u.haveCorrection;
+    std::copy (u.curve, u.curve + 29, correctionCurve);
+    characterIndex = u.characterIndex;
+    std::copy (u.charCurve, u.charCurve + 29, charCurve);
+    presets.setCurrent (u.presetCurrent);
+    haveAutoTarget = u.haveAutoTarget; autoLoudTarget = u.autoLoudTarget; autoInputLoudRef.store (u.inLoudRef);
+    autoResult = u.result;
+    autoState = u.state;
+    souffleArmed = false;
+    u.valid = false;           // one level: the snapshot is used up
+}
+
 void WhaleAudioProcessor::finishListening()
 {
     inCap.pull();
@@ -551,11 +586,10 @@ void WhaleAudioProcessor::finishListening()
     autoInputLoudRef.store (autoInputLoud - 1.0f);
     double bpm = hostBpm.load();
     if (bpm <= 0) bpm = AutoMaster::estimateTempo (envLow, envHigh, AudioAnalyzer::envelopeRate);
+    takeUndoSnapshot();                 // before anything changes
     autoResult = AutoMaster::compute (features, (int) pStyle->load(), bpm, (int) pTarget->load(), pCeil->load());
-    if (! autoResult.valid) { autoState = AutoState::idle; return; }
+    if (! autoResult.valid) { autoResult = undo.result; autoState = AutoState::idle; return; }
     beforeAuto = readBase();
-    prevCorrection = correction; prevHave = haveCorrection;
-    std::copy (correctionCurve, correctionCurve + 29, prevCurve);
     correction = autoResult.base;
     AutoMaster::eqResponse (correction, correctionCurve);
     haveCorrection = true;
@@ -652,6 +686,7 @@ void WhaleAudioProcessor::setStateInformation (const void* data, int size)
     for (int i = 0; i < presets.getAll().size(); ++i)
         if (presets.getAll()[i].name == name) presets.setCurrent (i);
     haveCorrection = false; characterIndex = -1;
+    undo.valid = false;                 // a project reload starts a new history
     const auto layers = st.getChildWithName ("Layers");
     if (layers.isValid())
     {

@@ -111,7 +111,7 @@ private:
 };
 
 // Small text button (EXPERT, menu, etc.)
-class TextLink : public juce::Component
+class TextLink : public juce::Component, public juce::SettableTooltipClient
 {
 public:
     TextLink (const juce::String& t) : textValue (t) {}

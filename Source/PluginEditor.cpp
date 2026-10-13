@@ -13,6 +13,7 @@ WhaleEditor::WhaleEditor (WhaleAudioProcessor& p)
     content.addAndMakeVisible (ab);
     content.addAndMakeVisible (expertLink);
     content.addAndMakeVisible (menuLink);
+    content.addChildComponent (undoAutoLink);
     content.addAndMakeVisible (chain);
     content.addAndMakeVisible (autoButton);
     content.addAndMakeVisible (styleBox);
@@ -50,9 +51,11 @@ WhaleEditor::WhaleEditor (WhaleAudioProcessor& p)
     content.addChildComponent (browser);
 
     autoButton.onClick = [this] { proc.toggleAuto(); };
-    autoButton.setTooltip (fr ("Lance la lecture (idéalement depuis le début du drop), puis clique : WHALE écoute 30 s, règle la chaîne, puis mesure le son traité et corrige ce qui reste. Re-clique pour annuler."));
+    autoButton.setTooltip (fr ("Lance la lecture (idéalement depuis le début du drop), puis clique : WHALE écoute 30 s, règle la chaîne, puis mesure le son traité et corrige ce qui reste. Re-clique pendant l'analyse pour annuler ; après, « Annuler AUTO » remet les réglages d'avant."));
     expertLink.onClick = [this] { openExpert (expert.isVisible() ? -1 : 0); };
     menuLink.onClick = [this] { showMenu(); };
+    undoAutoLink.onClick = [this] { proc.undoAuto(); };
+    undoAutoLink.setTooltip (fr ("Revenir exactement aux réglages d'avant AUTO (preset, boutons, cible)"));
     chain.onOpenModule = [this] (int m) { openExpert (m); };
     presetBar.onOpen = [this] { browser.refresh(); browser.setVisible (! browser.isVisible()); expert.setVisible (false); };
     presetBar.onStep = [this] (int d)
@@ -117,6 +120,7 @@ void WhaleEditor::layout()
     menuLink.setBounds (1148, 12, 40, 34);
     chain.setBounds (20, 516, 1160, 40);
     autoButton.setBounds (14, 566, 184, 184);
+    undoAutoLink.setBounds (10, 108, 150, 26);
     styleBox.setBounds (210, 600, 150, 30);
     targetBox.setBounds (210, 660, 150, 30);
     dosage.setBounds (206, 716, 158, 20);
@@ -191,6 +195,7 @@ void WhaleEditor::showMenu()
     m.addItem (1, fr ("Rapport AUTO (ce qui a été fait)"));
     m.addItem (2, fr ("Animations réduites (ordinateurs moins puissants)"), true, reducedAnimations());
     m.addSeparator();
+    m.addItem (6, fr ("Annuler AUTO (revenir aux réglages d'avant)"), proc.canUndoAuto());
     m.addItem (3, fr ("Tout remettre à neutre"));
     m.addItem (4, fr ("Ouvrir le dossier de mes presets"));
     m.addSeparator();
@@ -200,6 +205,7 @@ void WhaleEditor::showMenu()
         if (r == 1) openExpert (7);
         else if (r == 2) setReducedAnimations (! reducedAnimations());
         else if (r == 3) proc.resetToNeutral();
+        else if (r == 6) proc.undoAuto();
         else if (r == 4) { auto d = PresetManager::userFolder(); d.createDirectory(); d.startAsProcess(); }
     });
 }
@@ -272,6 +278,10 @@ void WhaleEditor::timerCallback()
     else
         autoButton.setState (0, 0.0f, "MASTER");
     autoButton.tick (dt);
+    {
+        const bool showUndo = st == WhaleAudioProcessor::AutoState::done && proc.canUndoAuto();
+        if (undoAutoLink.isVisible() != showUndo) undoAutoLink.setVisible (showUndo);
+    }
 
     // ---- preset bar
     {

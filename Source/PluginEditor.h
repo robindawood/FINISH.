@@ -48,6 +48,7 @@ private:
     PresetBar presetBar;
     ABSwitch ab;
     TextLink expertLink { "EXPERT" }, menuLink { juce::String::fromUTF8 ("\xe2\x89\xa1") };
+    TextLink undoAutoLink { juce::String::fromUTF8 ("\xe2\x86\xb6  ANNULER AUTO") };
     ChainStrip chain;
     AutoButton autoButton;
     juce::ComboBox styleBox, targetBox;

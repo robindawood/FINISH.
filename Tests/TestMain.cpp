@@ -399,6 +399,42 @@ namespace
         CHECK (p.getSouffleCount() == (v == WhaleAudioProcessor::Verdict::validated ? 1 : 0), "le souffle only when validated, once");
     }
 
+    void testUndoAuto()
+    {
+        std::cout << "Annuler AUTO\n";
+        WhaleAudioProcessor p;
+        p.prepareToPlay (sr, block);
+        MixGen gen; gen.gainDb = -18.0f; gen.stereoBass = true;
+        setParam (p, PID::style, (float) styleTechHouse);
+        p.applyPreset (2);                                  // a preset chosen before AUTO
+        setParam (p, PID::mAir, 0.8f);                      // and a macro moved
+        auto snap = [&] { std::vector<float> v; for (auto* prm : p.getParameters()) v.push_back (prm->getValue()); return v; };
+        run (p, gen, 3.0);
+        const auto before = snap();
+        const int presetBefore = p.presets.getCurrent();
+        const float targetBefore = p.getEffectiveTarget();
+        CHECK (! p.canUndoAuto(), "nothing to undo before AUTO");
+        p.toggleAuto();
+        run (p, gen, 70.0);
+        CHECK (p.getAutoState() == WhaleAudioProcessor::AutoState::done && p.canUndoAuto(), "after AUTO: undo available");
+        float changed = 0; { auto a = snap(); for (size_t i = 0; i < a.size(); ++i) changed = std::max (changed, std::abs (a[i] - before[i])); }
+        CHECK (changed > 0.01f, "AUTO changed the settings");
+        p.undoAuto();
+        run (p, gen, 0.5);
+        float diff = 0; { auto a = snap(); for (size_t i = 0; i < a.size(); ++i) diff = std::max (diff, std::abs (a[i] - before[i])); }
+        std::cout << "    largest parameter difference after undo: " << diff << " (normalised)\n";
+        CHECK (diff < 1.0e-4f, "undo restores every parameter (preset, macros, modules)");
+        CHECK (p.presets.getCurrent() == presetBefore && std::abs (p.getEffectiveTarget() - targetBefore) < 0.01f, "undo restores the preset and the loudness target");
+        CHECK (p.getAutoState() == WhaleAudioProcessor::AutoState::idle && ! p.canUndoAuto(), "one level of undo, AUTO back to idle");
+        // cancel while AUTO verifies also restores everything
+        p.toggleAuto();
+        run (p, gen, 36.0);
+        CHECK (p.getAutoState() == WhaleAudioProcessor::AutoState::verifying, "AUTO verifying");
+        p.toggleAuto();
+        float diff2 = 0; { auto a = snap(); for (size_t i = 0; i < a.size(); ++i) diff2 = std::max (diff2, std::abs (a[i] - before[i])); }
+        CHECK (diff2 < 1.0e-4f, "cancel during verification restores every parameter");
+    }
+
     void testPresetLayering()
     {
         std::cout << "Presets layered on AUTO\n";
@@ -689,6 +725,7 @@ int main (int argc, char** argv)
     testAutoProfiles();
     testLowCut();
     testAutoEndToEnd();
+    testUndoAuto();
     testPresetLayering();
     testPresetsAndState();
     std::cout << (failures == 0 ? "\nALL TESTS PASSED\n" : "\nFAILURES: " + std::to_string (failures) + "\n");

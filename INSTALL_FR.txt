@@ -20,6 +20,7 @@ UTILISATION RAPIDE
 4. Compare avec SANS / AVEC (au même volume sur les passages forts : tu entends la vraie différence, pas juste « plus fort »).
    Les indicateurs à droite montrent ce que tu entends : TRUE PEAK, TONALITÉ (écart à tes références du style),
    DYNAMIQUE (vert = pas écrasé pour ta cible), STÉRÉO, GRAVES MONO.
+   Pas convaincu ? « ↶ ANNULER AUTO » (en haut à gauche, ou menu ≡) remet exactement les réglages d'avant.
 5. Ajuste avec les 8 boutons (0 = le choix d'AUTO), ou choisis un preset.
 6. EXPERT : réglages détaillés de chaque module + RAPPORT AUTO (ce qui a été fait, et pourquoi).
 
