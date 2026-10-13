@@ -20,6 +20,7 @@ void WhaleDSP::prepare (double sampleRate, int maxBlockSize, int numChannels)
 
     for (auto* s : { &sPunch, &sDrive, &sCeil }) s->reset (sr, 0.05);
     for (auto* s : { &sGlue, &sSat, &sSide, &sMono, &sClip, &sLow, &sAir }) s->reset (sr, 0.25);
+    sLowCutOn.reset (sr, 0.1);
     for (auto& s : sSpecGain) s.reset (sr, 0.25);
     for (auto& s : sSpecDyn) s.reset (sr, 0.25);
     sLevOn.reset (sr, 0.05);
@@ -28,8 +29,9 @@ void WhaleDSP::prepare (double sampleRate, int maxBlockSize, int numChannels)
     // SPECTRAL detectors (on the mid signal) and bells
     for (int b = 0; b < 4; ++b)
     {
-        specDet[b].setBandPass (sr, specBands[b].hz, 1.2);
-        specBell[b].setPeak (sr, specBands[b].hz, specBands[b].q, 0.0);
+        specHzNow[b] = specBands[b].hz;
+        specDet[b].setBandPass (sr, specHzNow[b], 1.2);
+        specBell[b].setPeak (sr, specHzNow[b], specBands[b].q, 0.0);
     }
     specAtt = envCoeff (sr, 0.005); specRel = envCoeff (sr, 0.12); specAvgCoef = envCoeff (sr, 2.0);
 
@@ -122,7 +124,7 @@ void WhaleDSP::reset()
         specDet[b].reset(); specBell[b].reset();
         specEnv[b] = specAvg[b] = specCut[b] = 0.0f;
         lastSpecGain[b] = 0.0f;
-        specBell[b].setPeak (sr, specBands[b].hz, specBands[b].q, 0.0);
+        specBell[b].setPeak (sr, specHzNow[b], specBands[b].q, 0.0);
     }
     specCounter = 0;
     fastEnv = slowEnv = 0.0f;
@@ -131,6 +133,10 @@ void WhaleDSP::reset()
         b->reset();
     for (int k = 0; k < 3; ++k) bandEnv[k] = bandRms[k] = bandGr[k] = 0.0f;
     lastLow = lastAir = 1000.0f;
+    sLowCutOn.setCurrentAndTargetValue (0.0f);
+    lowCutHz = lowCutTargetHz = 20.0f;
+    lowCutA.set (sr, lowCutHz, 0.51763809); lowCutB.set (sr, lowCutHz, 0.70710678); lowCutC.set (sr, lowCutHz, 1.93185165);
+    lowCutA.reset(); lowCutB.reset(); lowCutC.reset();
     lastMonoHz = -1.0f;
     toneCounter = 0;
     if (os != nullptr) os->reset();
@@ -171,7 +177,7 @@ void WhaleDSP::process (juce::AudioBuffer<float>& buffer, const Settings& s) noe
     {
         const float outShort = powerToLufs (pOutShort), inShort = powerToLufs (pInShort);
         const float err = s.targetLufs - outShort;
-        const bool loudPassage = inShort > -50.0f && inShort >= s.loudInputLufs - 2.5f;
+        const bool loudPassage = inShort > -50.0f && inShort >= s.loudInputLufs - 1.5f;
         if (loudPassage && outShort > s.targetLufs - 6.0f && ! (err > 0 && -gainToDb (limGain) > 8.0f))
             corrDb = juce::jlimit (-14.0f, 14.0f, corrDb + err * (float) n / (float) (sr * 6.0));
     }
@@ -188,6 +194,11 @@ void WhaleDSP::process (juce::AudioBuffer<float>& buffer, const Settings& s) noe
     sClip.setTargetValue (juce::jlimit (0.0f, 1.0f, s.clip));
     sNl.setTargetValue ((s.clip > 1.0e-3f || s.satDrive > 1.0e-3f) ? 1.0f : 0.0f);
     sLow.setTargetValue (juce::jlimit (-6.0f, 6.0f, s.lowDb));
+    {
+        const bool cutOn = s.lowCutHz >= 15.0f;
+        sLowCutOn.setTargetValue (cutOn ? 1.0f : 0.0f);
+        if (cutOn) lowCutTargetHz = juce::jlimit (15.0f, 60.0f, s.lowCutHz);
+    }
     sAir.setTargetValue (juce::jlimit (-6.0f, 6.0f, s.airDb));
     sDrive.setTargetValue (juce::jlimit (-12.0f, 30.0f, s.driveDb + corrDb));
     sCeil.setTargetValue (juce::jlimit (-6.0f, -0.1f, s.ceilingDb));
@@ -196,6 +207,15 @@ void WhaleDSP::process (juce::AudioBuffer<float>& buffer, const Settings& s) noe
     {
         sSpecGain[b].setTargetValue (juce::jlimit (-6.0f, 6.0f, s.specGainDb[b]));
         sSpecDyn[b].setTargetValue (juce::jlimit (0.0f, 1.0f, s.specDyn[b]));
+        // centre frequency: glide in the log domain (a few blocks), redesign detector + bell when it moved
+        const float want = juce::jlimit (specBands[b].lo, specBands[b].hi, s.specHz[b]);
+        if (std::abs (std::log (want / specHzNow[b])) > 0.002f)
+        {
+            specHzNow[b] *= std::pow (want / specHzNow[b], 0.35f);
+            if (std::abs (std::log (want / specHzNow[b])) <= 0.002f) specHzNow[b] = want;
+            specDet[b].setBandPass (sr, specHzNow[b], 1.2);
+            specRedesign[b] = true;
+        }
     }
     if (std::abs (s.detail - lastDetail) > 0.01f)
     {
@@ -251,12 +271,35 @@ void WhaleDSP::process (juce::AudioBuffer<float>& buffer, const Settings& s) noe
     matchDb.store (gainToDb (matchGain));
 }
 
-// SPECTRAL -> COMPRESSION -> BASSES/AIR -> LARGEUR
+void WhaleDSP::HpD::set (double sampleRate, double f, double q) noexcept
+{
+    const double w0 = 2.0 * juce::MathConstants<double>::pi * f / sampleRate, cw = std::cos (w0), alpha = std::sin (w0) / (2.0 * q);
+    const double a0 = 1.0 + alpha;
+    b0 = (1.0 + cw) / 2.0 / a0; b1 = -(1.0 + cw) / a0; b2 = b0;
+    a1 = -2.0 * cw / a0; a2 = (1.0 - alpha) / a0;
+}
+
+// LOW-CUT -> SPECTRAL -> COMPRESSION -> BASSES/AIR -> LARGEUR
 void WhaleDSP::stageA (float* L, float* R, int n, const Settings&) noexcept
 {
     for (int i = 0; i < n; ++i)
     {
         float l = L[i], r = R[i];
+
+        // ---- LOW-CUT (first: the dynamic stages must not react to rumble that is removed anyway)
+        {
+            const float on = sLowCutOn.getNextValue();
+            if ((i & 31) == 0 && std::abs (lowCutTargetHz - lowCutHz) > 0.05f)
+            {
+                lowCutHz += 0.2f * (lowCutTargetHz - lowCutHz);    // glide: no zipper when AUTO moves it
+                lowCutA.set (sr, lowCutHz, 0.51763809);
+                lowCutB.set (sr, lowCutHz, 0.70710678);
+                lowCutC.set (sr, lowCutHz, 1.93185165);
+            }
+            const float hl = (float) lowCutC.process (lowCutB.process (lowCutA.process (l, 0), 0), 0);
+            const float hr = (float) lowCutC.process (lowCutB.process (lowCutA.process (r, 1), 1), 1);
+            if (on > 1.0e-4f) { l += on * (hl - l); r += on * (hr - r); }
+        }
 
         // ---- SPECTRAL: static bell + dynamic cut when the band bursts above its own 2 s average
         {
@@ -276,10 +319,11 @@ void WhaleDSP::stageA (float* L, float* R, int n, const Settings&) noexcept
                     const float want = (over > 0 && dyn > 1.0e-3f) ? std::min (6.0f, 0.6f * over) * dyn : 0.0f;
                     specCut[b] = 0.7f * specCut[b] + 0.3f * want;
                     const float total = g - specCut[b];
-                    if (std::abs (total - lastSpecGain[b]) > 0.05f || (std::abs (total) < 0.05f && lastSpecGain[b] != 0.0f))
+                    if (specRedesign[b] || std::abs (total - lastSpecGain[b]) > 0.05f || (std::abs (total) < 0.05f && lastSpecGain[b] != 0.0f))
                     {
+                        specRedesign[b] = false;
                         lastSpecGain[b] = std::abs (total) < 0.05f ? 0.0f : total;
-                        specBell[b].setPeak (sr, specBands[b].hz, specBands[b].q, lastSpecGain[b]);
+                        specBell[b].setPeak (sr, specHzNow[b], specBands[b].q, lastSpecGain[b]);
                     }
                 }
                 if (lastSpecGain[b] != 0.0f)

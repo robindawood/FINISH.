@@ -85,8 +85,8 @@ private:
     std::atomic<float> *pStyle = nullptr, *pTarget = nullptr, *pCeil = nullptr, *pDosage = nullptr, *pBypass = nullptr, *pMatch = nullptr, *pManual = nullptr;
     std::atomic<float> *pM[8] {};
     std::atomic<float> *pOn[6] {};
-    std::atomic<float> *pSpecG[4] {}, *pSpecD[4] {};
-    std::atomic<float> *pGlue = nullptr, *pPunch = nullptr, *pDetail = nullptr, *pSat = nullptr, *pSide = nullptr, *pMono = nullptr, *pLow = nullptr, *pAir = nullptr, *pClip = nullptr;
+    std::atomic<float> *pSpecG[4] {}, *pSpecD[4] {}, *pSpecF[4] {};
+    std::atomic<float> *pGlue = nullptr, *pPunch = nullptr, *pDetail = nullptr, *pSat = nullptr, *pSide = nullptr, *pMono = nullptr, *pLow = nullptr, *pAir = nullptr, *pClip = nullptr, *pLowCut = nullptr;
 
     std::atomic<double> hostBpm { 0.0 };
     std::atomic<float> effectiveTarget { -9.0f }, driveFF { 0.0f };

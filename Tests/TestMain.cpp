@@ -235,9 +235,10 @@ namespace
             const auto t = AutoMaster::analyseTone (g, p, 1.0f);
             auto corrected = g;
             for (int b = 0; b < 29; ++b)
-                corrected.thirdOctDb[b] += AutoMaster::toolResponseDb (0, profileThirdOctHz[b], r.base.toneLow) + AutoMaster::toolResponseDb (1, profileThirdOctHz[b], r.base.specGain[0])
-                                         + AutoMaster::toolResponseDb (2, profileThirdOctHz[b], r.base.specGain[1]) + AutoMaster::toolResponseDb (3, profileThirdOctHz[b], r.base.specGain[2])
-                                         + AutoMaster::toolResponseDb (4, profileThirdOctHz[b], r.base.specGain[3]) + AutoMaster::toolResponseDb (5, profileThirdOctHz[b], r.base.toneAir);
+            {
+                corrected.thirdOctDb[b] += AutoMaster::toolResponseDb (0, profileThirdOctHz[b], r.base.toneLow) + AutoMaster::toolResponseDb (5, profileThirdOctHz[b], r.base.toneAir);
+                for (int k = 0; k < 4; ++k) corrected.thirdOctDb[b] += AutoMaster::toolResponseDb (k + 1, profileThirdOctHz[b], r.base.specGain[k], r.base.specFreq[k]);
+            }
             const auto t2 = AutoMaster::analyseTone (corrected, p, 1.0f);
             std::cout << "    tonal distance " << t.error << " dB -> " << t2.error << " dB after the EQ\n";
             CHECK (t2.error < 0.4f * t.error, "EQ removes most of the distance to the references");
@@ -251,6 +252,17 @@ namespace
             r = AutoMaster::compute (g, styleTechHouse, 126.0, styleTarget, -1.0f);
             CHECK (r.base.compGlue < 0.01f && ! r.mixNotes.isEmpty(), "crest 5 dB: nothing more squashed, the mix is flagged");
         }
+        // Low-cut: rumble under 40 Hz is removed, a clean low end is left alone
+        {
+            auto clean = AutoMaster::compute (featuresFromProfile (p), styleTechHouse, 126.0, styleTarget, -1.0f);
+            CHECK (clean.base.lowCut < 1.0f, "low end on the references: no low-cut");
+            auto g = featuresFromProfile (p);
+            g.thirdOctDb[0] += 14.0f; g.thirdOctDb[1] += 12.0f; g.thirdOctDb[2] += 6.0f;
+            auto rr = AutoMaster::compute (g, styleTechHouse, 126.0, styleTarget, -1.0f);
+            std::cout << "    rumble +14 dB at 25 Hz -> low-cut " << rr.base.lowCut << " Hz, 60 Hz bell " << rr.base.specGain[0] << " dB\n";
+            CHECK (rr.base.lowCut >= 20.0f && rr.base.lowCut <= 40.0f, "rumble under 40 Hz: low-cut chosen between 20 and 40 Hz");
+            CHECK (AutoMaster::lowCutResponseDb (rr.base.lowCut, 63.0f) > -1.0f, "the kick (63 Hz) is kept");
+        }
         // Style detection by tempo
         CHECK (AutoMaster::detectStyle (f, 174.0) == styleDnb, "174 BPM -> Drum & Bass");
         CHECK (AutoMaster::detectStyle (f, 155.0) == styleHardTechno, "155 BPM -> Hard Techno");
@@ -258,6 +270,31 @@ namespace
         CHECK (AutoMaster::detectStyle (f, 126.0) == styleTechHouse || AutoMaster::detectStyle (f, 126.0) == styleAfro, "126 BPM -> house family");
         auto lf = AutoMaster::compute (featuresFromProfile (AutoMaster::profile (styleLofi)), styleLofi, 85.0, styleTarget, -1.0f);
         CHECK (lf.base.clipAmt <= 0.2f && lf.base.compGlue < 0.3f && lf.loudPassageTarget < -10.0f, "lo-fi: soft target, light clipper at most");
+    }
+
+    void testLowCut()
+    {
+        std::cout << "Low-cut filter (BASSES/AIR)\n";
+        auto level = [] (float hz, float cut)
+        {
+            WhaleDSP d;
+            d.prepare (sr, block, 2);
+            WhaleDSP::Settings s; s.lowCutHz = cut;
+            juce::AudioBuffer<float> b (2, block);
+            double ph = 0, acc = 0; int cnt = 0;
+            for (int k = 0; k < (int) (3.0 * sr / block); ++k)
+            {
+                for (int i = 0; i < block; ++i) { const float v = 0.25f * (float) std::sin (ph); ph += 2 * juce::MathConstants<double>::pi * hz / sr; b.setSample (0, i, v); b.setSample (1, i, v); }
+                d.process (b, s);
+                if (k > (int) (1.5 * sr / block)) { for (int i = 0; i < block; ++i) acc += b.getSample (0, i) * b.getSample (0, i); cnt += block; }
+            }
+            return 10.0 * std::log10 (acc / cnt / (0.25 * 0.25 / 2));
+        };
+        const double r20 = level (20.0f, 30.0f), r100 = level (100.0f, 30.0f), off20 = level (20.0f, 0.0f);
+        std::cout << "    30 Hz low-cut: 20 Hz " << r20 << " dB, 100 Hz " << r100 << " dB; off: 20 Hz " << off20 << " dB\n";
+        CHECK (r20 < -12.0, "20 Hz rumble strongly reduced");
+        CHECK (std::abs (r100) < 0.3, "100 Hz untouched");
+        CHECK (std::abs (off20) < 0.3, "off = transparent");
     }
 
     void testAutoEndToEnd()
@@ -311,6 +348,16 @@ namespace
         q.setStateInformation (mb.getData(), (int) mb.getSize());
         CHECK (std::abs (q.state.getRawParameterValue (PID::mAir)->load() - 0.8f) < 0.01f, "macros restored with the project");
         CHECK (q.presets.getCurrentName() == p.presets.getCurrentName(), "current preset name restored");
+        // low-cut and band centres: set by AUTO, kept by a factory preset (they correct the mix), saved with the project
+        setParam (p, PID::lowCut, 32.0f);
+        setParam (p, PID::specFreq[0], 110.0f);
+        p.applyPreset (1);
+        CHECK (std::abs (p.state.getRawParameterValue (PID::lowCut)->load() - 32.0f) < 0.6f, "factory preset keeps the low-cut");
+        juce::MemoryBlock mb2;
+        p.getStateInformation (mb2);
+        WhaleAudioProcessor q2;
+        q2.setStateInformation (mb2.getData(), (int) mb2.getSize());
+        CHECK (std::abs (q2.state.getRawParameterValue (PID::lowCut)->load() - 32.0f) < 0.6f, "low-cut restored with the project");
     }
 
     // ------------------------------------------------------------------------------------------- snapshots
@@ -463,6 +510,7 @@ int main (int argc, char** argv)
     testLoudnessLoopAndAB();
     testSpectralCapture();
     testAutoProfiles();
+    testLowCut();
     testAutoEndToEnd();
     testPresetsAndState();
     std::cout << (failures == 0 ? "\nALL TESTS PASSED\n" : "\nFAILURES: " + std::to_string (failures) + "\n");

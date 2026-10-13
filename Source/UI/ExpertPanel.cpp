@@ -61,8 +61,8 @@ void ExpertPanel::build()
         case 0:
             for (int b = 0; b < 4; ++b)
             {
-                addRow (PID::specGain[b], juce::String (specBands[b].name) + " " + (specBands[b].hz >= 1000 ? juce::String (specBands[b].hz / 1000.0f, 1) + " kHz" : juce::String ((int) specBands[b].hz) + " Hz"),
-                        fr ("réglage fixe"), b < 2 ? magenta : cyan, true);
+                addRow (PID::specGain[b], juce::String (specBands[b].name), fr ("réglage fixe"), b < 2 ? magenta : cyan, true);
+                addRow (PID::specFreq[b], fr ("   fréquence"), {}, cyan);
                 addRow (PID::specDyn[b], fr ("   dynamique"), fr ("baisse auto sur les pics"), violet);
             }
             break;
@@ -81,6 +81,7 @@ void ExpertPanel::build()
         case 4:
             addRow (PID::toneLow, "BASSES 110 Hz", fr ("étagère grave"), magenta, true);
             addRow (PID::toneAir, "AIR 10 kHz", fr ("étagère aiguë"), cyan, true);
+            addRow (PID::lowCut, "COUPE-BAS", fr ("retire le grondement sous le kick (0 = off)"), violet);
             break;
         case 5:
             addRow (PID::clipAmt, "CLIPPER", fr ("part du travail avant le limiteur"), magenta);
@@ -118,11 +119,12 @@ void ExpertPanel::resized()
     const bool graph = module == 0 || module == 1;
     const float x0 = graph ? (float) getWidth() * 0.5f : 24.0f;
     const float w = (float) getWidth() - x0 - 24.0f;
-    float y = 96.0f;
-    const float rowH = rows.size() > 6 ? 34.0f : 48.0f;
+    const bool dense = rows.size() > 9;
+    float y = dense ? 84.0f : 96.0f;
+    const float rowH = dense ? 29.0f : rows.size() > 6 ? 34.0f : 48.0f;
     for (auto& r : rows)
     {
-        r->slider->setBounds (juce::Rectangle<float> (x0 + 190, y, w - 190, 26).toNearestInt());
+        r->slider->setBounds (juce::Rectangle<float> (x0 + 190, y, w - 190, dense ? 22.0f : 26.0f).toNearestInt());
         y += rowH;
     }
     if (module == 6) targetBox.setBounds (juce::Rectangle<float> (x0 + 190, y + 6, 240, 30).toNearestInt());
@@ -165,7 +167,7 @@ void ExpertPanel::drawSpectral (juce::Graphics& g, juce::Rectangle<float> r)
         for (int b = 0; b < 4; ++b)
         {
             const float gain = dos * proc.state.getRawParameterValue (PID::specGain[b])->load() - meterSpec[b];
-            const float x = std::log2 (hz / specBands[b].hz);
+            const float x = std::log2 (hz / proc.state.getRawParameterValue (PID::specFreq[b])->load());
             gdb += gain * std::exp (-x * x * 1.6f * specBands[b].q);
         }
         const float lo = dos * proc.state.getRawParameterValue (PID::toneLow)->load(), air = dos * proc.state.getRawParameterValue (PID::toneAir)->load();
@@ -176,7 +178,7 @@ void ExpertPanel::drawSpectral (juce::Graphics& g, juce::Rectangle<float> r)
     neon (g, curve, magenta, 2.2f, 0.8f);
     for (int b = 0; b < 4; ++b)
     {
-        const float x = fx (specBands[b].hz), y = fy (dos * proc.state.getRawParameterValue (PID::specGain[b])->load() - meterSpec[b]);
+        const float x = fx (proc.state.getRawParameterValue (PID::specFreq[b])->load()), y = fy (dos * proc.state.getRawParameterValue (PID::specGain[b])->load() - meterSpec[b]);
         g.setColour (juce::Colour (0xff1e0e3c));
         g.fillEllipse (x - 7, y - 7, 14, 14);
         g.setColour (magenta);

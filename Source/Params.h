@@ -36,6 +36,7 @@ namespace PID
     // module bases
     inline constexpr const char* specGain[4] = { "specGain0", "specGain1", "specGain2", "specGain3" };
     inline constexpr const char* specDyn[4]  = { "specDyn0", "specDyn1", "specDyn2", "specDyn3" };
+    inline constexpr const char* specFreq[4] = { "specFreq0", "specFreq1", "specFreq2", "specFreq3" };
     inline constexpr const char* compGlue   = "compGlue";
     inline constexpr const char* compPunch  = "compPunch";
     inline constexpr const char* compDetail = "compDetail";
@@ -45,6 +46,7 @@ namespace PID
     inline constexpr const char* toneLow    = "toneLow";
     inline constexpr const char* toneAir    = "toneAir";
     inline constexpr const char* clipAmt    = "clipAmt";
+    inline constexpr const char* lowCut     = "lowCut";
 
     inline constexpr int version = 1;
 }
@@ -78,16 +80,20 @@ inline constexpr int numLoudnessTargets = 7;
 inline constexpr int styleTarget = 0, sameLevelTarget = 5, manualTarget = 6;
 
 // Dynamic EQ bands of the SPECTRAL module.
-struct SpecBand { const char* name; float hz; float q; };
-inline constexpr SpecBand specBands[4] = { { "SUB", 60.0f, 0.9f }, { "LOW-MID", 300.0f, 1.0f }, { "PRESENCE", 3500.0f, 1.1f }, { "HIGHS", 8000.0f, 1.0f } };
+// hz = default centre; lo..hi = range the centre can be moved in (AUTO places it where the mix needs it).
+struct SpecBand { const char* name; float hz; float q; float lo; float hi; };
+inline constexpr SpecBand specBands[4] = { { "SUB", 60.0f, 0.9f, 35.0f, 160.0f }, { "LOW-MID", 300.0f, 1.0f, 150.0f, 800.0f },
+                                           { "PRESENCE", 3500.0f, 1.1f, 1500.0f, 6000.0f }, { "HIGHS", 8000.0f, 1.0f, 5000.0f, 14000.0f } };
 
 // Base values of the modules (what AUTO / presets / EXPERT write). Default = neutral: WHALE is transparent apart
 // from the safety limiter.
 struct ModuleBase
 {
     float specGain[4] {}, specDyn[4] {};
+    float specFreq[4] { 60.0f, 300.0f, 3500.0f, 8000.0f };   // = specBands[].hz
     float compGlue = 0, compPunch = 0, compDetail = 0.5f, satDrive = 0;
     float widthSide = 0, widthMono = 0, toneLow = 0, toneAir = 0, clipAmt = 0;
+    float lowCut = 0;   // Hz, 0 = off (low-cut of the BASSES/AIR module: rumble under the kick)
 };
 
 inline juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout()
@@ -149,6 +155,13 @@ inline juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout
     {
         dbParam (PID::specGain[b], specNames[b], -6.0f, 6.0f, neutral.specGain[b]);
         unit01 (PID::specDyn[b], String (specNames[b]) + " Dynamic", neutral.specDyn[b]);
+        {
+            NormalisableRange<float> range (specBands[b].lo, specBands[b].hi, 1.0f);
+            range.setSkewForCentre (specBands[b].hz);
+            layout.add (std::make_unique<AudioParameterFloat> (ParameterID { PID::specFreq[b], PID::version }, String (specNames[b]) + " Freq", range, neutral.specFreq[b],
+                            AudioParameterFloatAttributes().withLabel ("Hz").withStringFromValueFunction ([] (float v, int)
+                            { return v >= 1000.0f ? String (v / 1000.0f, 2) + " kHz" : String (roundToInt (v)) + " Hz"; })));
+        }
     }
     unit01 (PID::compGlue,   "Compression Glue", neutral.compGlue);
     unit01 (PID::compPunch,  "Compression Punch", neutral.compPunch);
@@ -161,5 +174,8 @@ inline juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout
     dbParam (PID::toneLow, "Bass Shelf", -6.0f, 6.0f, neutral.toneLow);
     dbParam (PID::toneAir, "Air Shelf", -6.0f, 6.0f, neutral.toneAir);
     unit01 (PID::clipAmt, "Clipper", neutral.clipAmt);
+    layout.add (std::make_unique<AudioParameterFloat> (ParameterID { PID::lowCut, PID::version }, "Low Cut",
+                    NormalisableRange<float> (0.0f, 60.0f, 1.0f), neutral.lowCut,
+                    AudioParameterFloatAttributes().withLabel ("Hz").withStringFromValueFunction ([] (float v, int) { return v < 1 ? String ("Off") : String (roundToInt (v)) + " Hz"; })));
     return layout;
 }

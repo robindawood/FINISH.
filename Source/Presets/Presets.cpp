@@ -118,6 +118,7 @@ void PresetManager::refreshUserPresets()
         {
             b.specGain[k] = (float) xml->getDoubleAttribute (PID::specGain[k]);
             b.specDyn[k] = (float) xml->getDoubleAttribute (PID::specDyn[k]);
+            b.specFreq[k] = (float) xml->getDoubleAttribute (PID::specFreq[k], specBands[k].hz);
         }
         b.compGlue = (float) xml->getDoubleAttribute (PID::compGlue);
         b.compPunch = (float) xml->getDoubleAttribute (PID::compPunch);
@@ -128,6 +129,7 @@ void PresetManager::refreshUserPresets()
         b.toneLow = (float) xml->getDoubleAttribute (PID::toneLow);
         b.toneAir = (float) xml->getDoubleAttribute (PID::toneAir);
         b.clipAmt = (float) xml->getDoubleAttribute (PID::clipAmt);
+        p.lowCut = (float) xml->getDoubleAttribute (PID::lowCut, -1.0);
         all.add (p);
     }
 }
@@ -139,10 +141,11 @@ void PresetManager::apply (const WhalePreset& p, juce::AudioProcessorValueTreeSt
         if (auto* prm = st.getParameter (id))
             prm->setValueNotifyingHost (prm->convertTo0to1 (v));
     };
-    for (int b = 0; b < 4; ++b) { set (PID::specGain[b], p.base.specGain[b]); set (PID::specDyn[b], p.base.specDyn[b]); }
+    for (int b = 0; b < 4; ++b) { set (PID::specGain[b], p.base.specGain[b]); set (PID::specDyn[b], p.base.specDyn[b]); set (PID::specFreq[b], p.base.specFreq[b]); }
     set (PID::compGlue, p.base.compGlue); set (PID::compPunch, p.base.compPunch); set (PID::compDetail, p.base.compDetail);
     set (PID::satDrive, p.base.satDrive); set (PID::widthSide, p.base.widthSide); set (PID::widthMono, p.base.widthMono);
     set (PID::toneLow, p.base.toneLow); set (PID::toneAir, p.base.toneAir); set (PID::clipAmt, p.base.clipAmt);
+    if (p.lowCut >= 0.0f) set (PID::lowCut, p.lowCut);
     set (PID::target, (float) p.target);
     set (PID::ceiling, p.ceiling);
     if (auto* sp = st.getParameter (PID::style))
@@ -157,10 +160,11 @@ WhalePreset PresetManager::capture (const juce::AudioProcessorValueTreeState& st
     WhalePreset p;
     p.name = name; p.factory = false;
     auto get = [&] (const char* id) { return st.getRawParameterValue (id)->load(); };
-    for (int b = 0; b < 4; ++b) { p.base.specGain[b] = get (PID::specGain[b]); p.base.specDyn[b] = get (PID::specDyn[b]); }
+    for (int b = 0; b < 4; ++b) { p.base.specGain[b] = get (PID::specGain[b]); p.base.specDyn[b] = get (PID::specDyn[b]); p.base.specFreq[b] = get (PID::specFreq[b]); }
     p.base.compGlue = get (PID::compGlue); p.base.compPunch = get (PID::compPunch); p.base.compDetail = get (PID::compDetail);
     p.base.satDrive = get (PID::satDrive); p.base.widthSide = get (PID::widthSide); p.base.widthMono = get (PID::widthMono);
     p.base.toneLow = get (PID::toneLow); p.base.toneAir = get (PID::toneAir); p.base.clipAmt = get (PID::clipAmt);
+    p.lowCut = p.base.lowCut = get (PID::lowCut);
     p.style = juce::jmax (1, (int) get (PID::style));
     p.target = (int) get (PID::target);
     p.ceiling = get (PID::ceiling);
@@ -177,10 +181,11 @@ bool PresetManager::saveUserPreset (const WhalePreset& p)
     x.setAttribute ("style", p.style);
     x.setAttribute ("target", p.target);
     x.setAttribute ("ceiling", p.ceiling);
-    for (int k = 0; k < 4; ++k) { x.setAttribute (PID::specGain[k], p.base.specGain[k]); x.setAttribute (PID::specDyn[k], p.base.specDyn[k]); }
+    for (int k = 0; k < 4; ++k) { x.setAttribute (PID::specGain[k], p.base.specGain[k]); x.setAttribute (PID::specDyn[k], p.base.specDyn[k]); x.setAttribute (PID::specFreq[k], p.base.specFreq[k]); }
     x.setAttribute (PID::compGlue, p.base.compGlue); x.setAttribute (PID::compPunch, p.base.compPunch); x.setAttribute (PID::compDetail, p.base.compDetail);
     x.setAttribute (PID::satDrive, p.base.satDrive); x.setAttribute (PID::widthSide, p.base.widthSide); x.setAttribute (PID::widthMono, p.base.widthMono);
     x.setAttribute (PID::toneLow, p.base.toneLow); x.setAttribute (PID::toneAir, p.base.toneAir); x.setAttribute (PID::clipAmt, p.base.clipAmt);
+    if (p.lowCut >= 0.0f) x.setAttribute (PID::lowCut, p.lowCut);
     const auto file = dir.getChildFile (juce::File::createLegalFileName (p.name) + ".whalepreset");
     const bool ok = x.writeTo (file);
     refreshUserPresets();

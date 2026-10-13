@@ -12,6 +12,7 @@ struct WhalePreset
     int target = styleTarget;
     float ceiling = -1.0f;
     ModuleBase base;
+    float lowCut = -1.0f;           // < 0: the preset leaves the low-cut alone (it corrects the mix, not the character)
     bool factory = true;
     juce::File file;                // user presets
 };

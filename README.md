@@ -8,7 +8,7 @@ Mastering plug-in (VST3 / AU / Standalone, macOS + Windows) built with JUCE 8.
   still off and reports the remaining distance. Every move has a reason line in the AUTO report; problems that belong to the mix are reported, not "fixed".
 - **Styles** (from the user's reference tracks): Tech House / House, Afro / Latin House, Hard Techno / Rave, Drum & Bass,
   UK Garage / Bass, Lo-fi / Chill — or Auto detection (host tempo or own tempo estimate + spectral balance).
-- **Chain**: SPECTRAL (4 dynamic bells) → COMPRESSION (punch + 3-band leveller) → BASSES/AIR → LARGEUR (sides + mono bass)
+- **Chain**: LOW-CUT (36 dB/oct, set by AUTO) → SPECTRAL (4 dynamic bells, movable centres) → COMPRESSION (punch + 3-band leveller) → BASSES/AIR → LARGEUR (sides + mono bass)
   → x4 oversampled SATURATION + CLIPPER → true-peak look-ahead LIMITEUR. Linear-phase oversampling, ~2.9 ms latency at 44.1 kHz.
 - **Main screen**: 8 macros (0 = AUTO's choice), style / target / dosage, presets (25 factory + user presets), level-matched SANS/AVEC.
 - **The whale**: drawn from the sound (each line = a band), rises to the target surface, breaks through when too loud,

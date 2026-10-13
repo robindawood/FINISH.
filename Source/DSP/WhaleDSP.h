@@ -5,7 +5,7 @@
 
 // The WHALE mastering chain. Realtime-safe: no allocation, no locks after prepare().
 //
-//   in ─┬─ SPECTRAL (4 dynamic bells) → COMPRESSION (punch + 3-band leveller) → BASSES/AIR (shelves)
+//   in ─┬─ LOW-CUT → SPECTRAL (4 dynamic bells) → COMPRESSION (punch + 3-band leveller) → BASSES/AIR (shelves)
 //       │   → LARGEUR (sides + mono bass) → [x4 oversampled: SATURATION → drive → CLIPPER] → band-limit
 //       │   → LIMITEUR (look-ahead, 4x true-peak detection) → out
 //       └──────────────── dry (latency-aligned) ─────── A/B bypass, optionally level-matched
@@ -17,10 +17,12 @@ public:
     {
         bool bypass = false, matchAB = true;
         float specGainDb[4] {}, specDyn[4] {};
+        float specHz[4] { 60.0f, 300.0f, 3500.0f, 8000.0f };
         float punch = 0, glue = 0, detail = 0.5f;
         float satDrive = 0;
         float sideDb = 0, monoHz = 0;
         float lowDb = 0, airDb = 0;
+        float lowCutHz = 0;           // 0 = off
         float clip = 0;
         float driveDb = 0;            // gain into the clipper/limiter
         bool autoLoudness = false;    // closed loop: loud passages pulled onto targetLufs
@@ -69,6 +71,8 @@ private:
     // SPECTRAL: detector band-pass + bell per band
     Biquad specDet[4], specBell[4];
     float specEnv[4] {}, specAvg[4] {}, specCut[4] {}, lastSpecGain[4] {};
+    float specHzNow[4] { 60.0f, 300.0f, 3500.0f, 8000.0f };   // glides to Settings::specHz
+    bool specRedesign[4] {};
     float specAtt = 0, specRel = 0, specAvgCoef = 0;
     int specCounter = 0;
     std::array<std::atomic<float>, 4> specDynOut {};
@@ -79,6 +83,19 @@ private:
     float bandEnv[3] {}, bandRms[3] {}, bandGr[3] {};
     float bandAtt = 0, bandRel = 0, bandRmsCoef = 0, bandGrSmooth = 0, lastDetail = -1.0f;
     std::array<std::atomic<float>, 3> bandGrOut {};
+
+    // Low-cut: 6th-order Butterworth high-pass (36 dB/oct: removes rumble, leaves the kick an octave up untouched) in double precision (a 20-60 Hz corner at 44.1-192 kHz needs it),
+    // cross-faded in/out so switching it is click-free.
+    struct HpD
+    {
+        double b0 = 1, b1 = 0, b2 = 0, a1 = 0, a2 = 0, z1[2] {}, z2[2] {};
+        void set (double sr, double f, double q) noexcept;
+        inline double process (double x, int c) noexcept { const double y = b0 * x + z1[c]; z1[c] = b1 * x - a1 * y + z2[c]; z2[c] = b2 * x - a2 * y; return y; }
+        void reset() noexcept { z1[0] = z1[1] = z2[0] = z2[1] = 0; }
+    };
+    HpD lowCutA, lowCutB, lowCutC;
+    float lowCutHz = 0.0f, lowCutTargetHz = 0.0f;
+    juce::SmoothedValue<float> sLowCutOn;
 
     // BASSES / AIR
     Biquad shelfLow, shelfAir;

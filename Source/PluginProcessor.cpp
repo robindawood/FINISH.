@@ -19,9 +19,9 @@ WhaleAudioProcessor::WhaleAudioProcessor()
     for (int i = 0; i < 8; ++i) pM[i] = raw (macros[i]);
     const char* ons[6] = { PID::specOn, PID::compOn, PID::satOn, PID::widthOn, PID::toneOn, PID::clipOn };
     for (int i = 0; i < 6; ++i) pOn[i] = raw (ons[i]);
-    for (int b = 0; b < 4; ++b) { pSpecG[b] = raw (PID::specGain[b]); pSpecD[b] = raw (PID::specDyn[b]); }
+    for (int b = 0; b < 4; ++b) { pSpecG[b] = raw (PID::specGain[b]); pSpecD[b] = raw (PID::specDyn[b]); pSpecF[b] = raw (PID::specFreq[b]); }
     pGlue = raw (PID::compGlue); pPunch = raw (PID::compPunch); pDetail = raw (PID::compDetail); pSat = raw (PID::satDrive);
-    pSide = raw (PID::widthSide); pMono = raw (PID::widthMono); pLow = raw (PID::toneLow); pAir = raw (PID::toneAir); pClip = raw (PID::clipAmt);
+    pSide = raw (PID::widthSide); pMono = raw (PID::widthMono); pLow = raw (PID::toneLow); pAir = raw (PID::toneAir); pClip = raw (PID::clipAmt); pLowCut = raw (PID::lowCut);
     inAnalyzer.setPublishSamples (false);
     outAnalyzer.setPublishSamples (false);
     startTimerHz (30);
@@ -74,6 +74,7 @@ WhaleDSP::Settings WhaleAudioProcessor::buildSettings() noexcept
         {
             s.specGainDb[b] = dos * pSpecG[b]->load() + (b == 2 ? m (mDetail) * 3.0f : 0.0f);
             s.specDyn[b] = dos * pSpecD[b]->load();
+            s.specHz[b] = pSpecF[b]->load();
         }
     if (on[1])
     {
@@ -83,7 +84,7 @@ WhaleDSP::Settings WhaleAudioProcessor::buildSettings() noexcept
     }
     if (on[2]) s.satDrive = juce::jlimit (0.0f, 1.0f, dos * pSat->load() + 0.8f * m (mWarmth));
     if (on[3]) { s.sideDb = dos * pSide->load() + 6.0f * m (mWidth); s.monoHz = pMono->load(); }
-    if (on[4]) { s.lowDb = dos * pLow->load() + 6.0f * m (mBass); s.airDb = dos * pAir->load() + 6.0f * m (mAir); }
+    if (on[4]) { s.lowDb = dos * pLow->load() + 6.0f * m (mBass); s.airDb = dos * pAir->load() + 6.0f * m (mAir); s.lowCutHz = pLowCut->load(); }
     if (on[5]) s.clip = juce::jlimit (0.0f, 1.0f, pClip->load() * (0.5f + 0.5f * dos));
     s.ceilingDb = pCeil->load();
 
@@ -135,9 +136,9 @@ void WhaleAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::
 ModuleBase WhaleAudioProcessor::readBase() const
 {
     ModuleBase b;
-    for (int k = 0; k < 4; ++k) { b.specGain[k] = pSpecG[k]->load(); b.specDyn[k] = pSpecD[k]->load(); }
+    for (int k = 0; k < 4; ++k) { b.specGain[k] = pSpecG[k]->load(); b.specDyn[k] = pSpecD[k]->load(); b.specFreq[k] = pSpecF[k]->load(); }
     b.compGlue = pGlue->load(); b.compPunch = pPunch->load(); b.compDetail = pDetail->load(); b.satDrive = pSat->load();
-    b.widthSide = pSide->load(); b.widthMono = pMono->load(); b.toneLow = pLow->load(); b.toneAir = pAir->load(); b.clipAmt = pClip->load();
+    b.widthSide = pSide->load(); b.widthMono = pMono->load(); b.toneLow = pLow->load(); b.toneAir = pAir->load(); b.clipAmt = pClip->load(); b.lowCut = pLowCut->load();
     return b;
 }
 
@@ -152,10 +153,10 @@ void WhaleAudioProcessor::writeBase (const ModuleBase& b)
             prm->endChangeGesture();
         }
     };
-    for (int k = 0; k < 4; ++k) { set (PID::specGain[k], b.specGain[k]); set (PID::specDyn[k], b.specDyn[k]); }
+    for (int k = 0; k < 4; ++k) { set (PID::specGain[k], b.specGain[k]); set (PID::specDyn[k], b.specDyn[k]); set (PID::specFreq[k], b.specFreq[k]); }
     set (PID::compGlue, b.compGlue); set (PID::compPunch, b.compPunch); set (PID::compDetail, b.compDetail);
     set (PID::satDrive, b.satDrive); set (PID::widthSide, b.widthSide); set (PID::widthMono, b.widthMono);
-    set (PID::toneLow, b.toneLow); set (PID::toneAir, b.toneAir); set (PID::clipAmt, b.clipAmt);
+    set (PID::toneLow, b.toneLow); set (PID::toneAir, b.toneAir); set (PID::clipAmt, b.clipAmt); set (PID::lowCut, b.lowCut);
 }
 
 void WhaleAudioProcessor::toggleAuto()

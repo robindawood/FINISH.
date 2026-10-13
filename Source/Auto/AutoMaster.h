@@ -53,7 +53,17 @@ public:
     static ToneAnalysis analyseTone (const AudioFeatures& f, const StyleProfileData& p, float strength);
     // Least-squares fit of a wanted curve onto the EQ tools: gains (dB) for
     // [0] bass shelf 110 Hz, [1] bell 60 Hz, [2] bell 300 Hz, [3] bell 3.5 kHz, [4] bell 8 kHz, [5] air shelf 10 kHz.
+    // The 4 bells' centres can move (specBands[].lo..hi); BellHz = their current centres.
+    using BellHz = std::array<float, 4>;
+    static BellHz defaultBells() noexcept { return { specBands[0].hz, specBands[1].hz, specBands[2].hz, specBands[3].hz }; }
     static std::array<float, 6> fitTone (const ToneAnalysis& t);
-    static std::array<float, 6> fitToneBounded (const ToneAnalysis& t, bool lofi, std::array<float, 6> alreadyApplied);
-    static float toolResponseDb (int tool, float hz, float gainDb);
+    static std::array<float, 6> fitToneBounded (const ToneAnalysis& t, bool lofi, std::array<float, 6> alreadyApplied, bool lowCutActive = false,
+                                                BellHz bells = defaultBells());
+    // Places the bells where the wanted curve needs them (coordinate search over each bell's range), then fits the gains.
+    static std::array<float, 6> placeAndFit (const ToneAnalysis& t, bool lofi, bool lowCutActive, BellHz& bells);
+    static float toolResponseDb (int tool, float hz, float gainDb, float centreHz = 0.0f);
+    // Low-cut (6th-order Butterworth high-pass, 0 = off): response and the corner AUTO picks from a tone analysis.
+    // currentHz = low-cut already in the measured signal (second pass).
+    static float lowCutResponseDb (float cornerHz, float hz);
+    static float chooseLowCut (const ToneAnalysis& t, float currentHz, int style);
 };
