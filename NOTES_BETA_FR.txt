@@ -1,0 +1,37 @@
+WHALE 1.1.0 bêta 1 — notes de version
+=====================================
+
+AUTO
+- Coupe-bas automatique (20 à 40 Hz, 36 dB/oct) quand il y a de l'infra-grave inutile ; coupe-bas de protection
+  à 20 Hz quand AUTO relève les basses. Le kick n'est pas touché.
+- Égaliseur à 4 bandes mobiles : AUTO place chaque bande sur la fréquence qui corrige le mieux.
+- Détection du tempo et du style plus fiable ; deux nouveaux styles : Afro Tech / Riddim et Afro / Dancehall.
+- Profils de référence élargis (Tech House 28 morceaux, Hard Techno 13, Afro House 9, Lo-fi 9, Afro Tech 7,
+  Dancehall 6, Drum & Bass 3, UK Garage 2).
+- Volume plus précis : la cible est tenue à 0,1–0,2 dB près sur les passages forts, sans pomper dans les breaks.
+- Le rapport indique le passage écouté et prévient si un break s'y trouvait.
+- Style hésitant : quand deux styles sont très proches, WHALE l'affiche (« proche … ») pour que tu vérifies.
+- « ↶ ANNULER AUTO » : un clic remet exactement les réglages d'avant AUTO.
+
+PRESETS
+- 30 presets (9 styles). Ils se posent sur la correction d'AUTO au lieu de l'effacer : AUTO corrige le mix,
+  le preset ajoute la couleur (tonalité, punch, saturation, largeur, volume).
+- Saturation refaite (plus chaude dans le bas et le médium, sans casser le volume) et punch refait (le kick
+  ressort, la queue du grave se resserre).
+
+AFFICHAGE
+- Indicateurs de ce que tu entends : TRUE PEAK, TONALITÉ, DYNAMIQUE, STÉRÉO, GRAVES MONO.
+- SANS / AVEC au même volume sur les passages forts (l'écart appliqué est affiché).
+- Mention « LUFS COURT TERME (3 s) ».
+
+PERFORMANCES
+- Processeur : environ 6,5 % d'un cœur à 44,1 kHz, 10 % à 96 kHz.
+
+À TESTER PENDANT LA BÊTA
+1. Écoute sur 3 ou 4 mixes de styles différents : AUTO seul, puis 2 ou 3 presets du style.
+2. Test à l'aveugle : compare WHALE à un autre outil ou à un master pro AU MÊME VOLUME
+   (un ami change de piste sans te dire laquelle). Note ce que tu préfères et pourquoi.
+3. Écoute sur plusieurs systèmes : casque, enceintes, téléphone, voiture.
+4. Vérifie l'affichage, le changement de preset pendant la lecture, et la réouverture du projet
+   (les réglages et la correction d'AUTO doivent revenir à l'identique).
+5. Note tout ce qui sonne faux, avec le style, le preset et le passage du morceau.

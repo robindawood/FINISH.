@@ -327,7 +327,11 @@ void WhaleEditor::timerCallback()
         in.caption = proc.isWaitingForAudio() ? fr ("AUTO : lance la lecture sur la partie la plus forte (drop / refrain)") : fr ("AUTO écoute ton morceau… la baleine remonte vers la cible");
     else if (st == WhaleAudioProcessor::AutoState::verifying) in.caption = fr ("AUTO a réglé la chaîne et vérifie le résultat");
     else if (st == WhaleAudioProcessor::AutoState::done)
-        in.caption = fr ("Style ") + styleShortNames()[proc.getAutoResult().style] + fr (" — rapport complet : menu ≡ ou EXPERT › RAPPORT AUTO");
+        {
+            const auto& ar = proc.getAutoResult();
+            in.caption = fr ("Style ") + styleShortNames()[ar.style] + (ar.styleAlt > 0 ? fr (" (proche ") + styleShortNames()[ar.styleAlt] + ")" : juce::String())
+                       + fr (" — rapport complet : menu ≡ ou EXPERT › RAPPORT AUTO");
+        }
     else if (! sound) in.caption = fr ("Lance la lecture, choisis un preset ou clique sur AUTO");
     scene.advance (in, dt);
     scene.repaint();

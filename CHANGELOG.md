@@ -1,5 +1,12 @@
 # WHALE changelog
 
+## 1.1.0 beta 1
+- AUTO: automatic low-cut, movable EQ bells (bounded least squares), comb tempo estimation, scored style detection with
+  a runner-up style shown on close calls, listened passage and break warning in the report, gated loudness loop.
+- New styles Afro Tech / Riddim and Afro / Dancehall; reference profiles extended.
+- Presets layer on AUTO (correction + colour), 30 presets rebuilt from the reference spread; saturation and punch v2.
+- Indicators measure what is heard; A/B match on loud passages; Undo AUTO; CPU -20 to -40 %.
+
 ## 1.0.0 (en cours)
 - New product: WHALE Mastering (replaces FINISH's mastering; "Finish my track" and the Ableton bridge are removed).
 - AUTO based on style profiles measured on real reference masters, style detection (tempo + balance), verification pass.

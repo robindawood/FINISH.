@@ -340,6 +340,22 @@ namespace
             CHECK (AutoMaster::detectStyle (af, 122.0) == styleAfro, "Afro House curve at 122 BPM -> Afro / Latin House");
         }
         CHECK (AutoMaster::detectStyle (f, 126.0) == styleTechHouse || AutoMaster::detectStyle (f, 126.0) == styleAfro, "126 BPM -> house family");
+        {
+            // Hesitation: a curve halfway between Tech House and Afro House is a close call, the profile itself is not
+            int alt = -1; float margin = -1.0f;
+            const int st = AutoMaster::detectStyle (featuresFromProfile (AutoMaster::profile (styleDnb)), 174.0, &alt, &margin);
+            CHECK (st == styleDnb && alt > 0 && alt != st && margin >= 0.3f, "DnB profile at 174 BPM: clear call (no hesitation)");
+            auto th = featuresFromProfile (AutoMaster::profile (styleTechHouse)), afh = featuresFromProfile (AutoMaster::profile (styleAfro)), mix = th;
+            for (int k = 0; k < 29; ++k) mix.thirdOctDb[k] = 0.5f * (th.thirdOctDb[k] + afh.thirdOctDb[k]);
+            mix.lowRatio = 0.5f * (th.lowRatio + afh.lowRatio); mix.subRatio = 0.5f * (th.subRatio + afh.subRatio);
+            mix.lowMidRatio = 0.5f * (th.lowMidRatio + afh.lowMidRatio); mix.presenceRatio = 0.5f * (th.presenceRatio + afh.presenceRatio);
+            mix.highRatio = 0.5f * (th.highRatio + afh.highRatio); mix.sideRatio = 0.5f * (th.sideRatio + afh.sideRatio);
+            mix.plr = 0.5f * (th.plr + afh.plr);
+            const int sm = AutoMaster::detectStyle (mix, 0.0, &alt, &margin);
+            std::cout << "    TH/Afro blend -> style " << sm << ", second " << alt << ", margin " << margin << "\n";
+            const auto rm = AutoMaster::compute (mix, styleAuto, 0.0, styleTarget, -1.0f);
+            CHECK (rm.style == sm && (margin >= 0.3f ? rm.styleAlt == 0 : rm.styleAlt == alt), "close call reported as styleAlt (margin < 0.3)");
+        }
         auto lf = AutoMaster::compute (featuresFromProfile (AutoMaster::profile (styleLofi)), styleLofi, 85.0, styleTarget, -1.0f);
         CHECK (lf.base.clipAmt <= 0.2f && lf.base.compGlue < 0.3f && lf.loudPassageTarget < -10.0f, "lo-fi: soft target, light clipper at most");
     }

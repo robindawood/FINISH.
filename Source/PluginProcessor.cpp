@@ -486,6 +486,12 @@ void WhaleAudioProcessor::timerCallback()
 AudioFeatures WhaleAudioProcessor::makeFeatures (const std::vector<AnalysisFrame>& frames, const SpectralCapture::Result& spec)
 {
     auto f = AnalysisSession::computeFeatures (frames);
+    for (const auto& fr : frames)
+        if (fr.hostTime >= 0.0)
+        {
+            f.hostStart = f.hostStart < 0.0 ? fr.hostTime : std::min (f.hostStart, fr.hostTime);
+            f.hostEnd = std::max (f.hostEnd, fr.hostTime);
+        }
     if (! spec.valid) return f;
     f.valid = true;
     f.hasSpectrum = true;
@@ -506,6 +512,9 @@ AudioFeatures WhaleAudioProcessor::makeFeatures (const std::vector<AnalysisFrame
         std::vector<float> above;
         for (auto v : st) if (v >= med) above.push_back (v);
         f.loudLufs = above[above.size() / 2];
+        int quiet = 0;
+        for (auto v : st) if (v < f.loudLufs - 6.0f) ++quiet;
+        f.quietShare = (float) quiet / (float) st.size();
     }
     return f;
 }

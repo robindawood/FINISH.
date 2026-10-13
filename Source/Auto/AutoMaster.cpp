@@ -118,23 +118,28 @@ namespace
     }
 }
 
-int AutoMaster::detectStyle (const AudioFeatures& f, double bpm)
+int AutoMaster::detectStyle (const AudioFeatures& f, double bpm, int* runnerUp, float* margin)
 {
+    if (runnerUp != nullptr) *runnerUp = 0;
+    if (margin != nullptr) *margin = 99.0f;
     if (f.hasSpectrum)
     {
         // Spectral distance to each style's references + tempo plausibility (0.15 per BPM outside the style's range).
         // Lo-fi only for a dark, dynamic master. Leave-one-out on the 71 reference masters: 48/71, no false Dancehall;
         // most misses are house-family neighbours (Tech House / Afro / Afro Tech), which sound close anyway.
-        int best = styleTechHouse;
-        float bestScore = 1.0e9f;
+        int best = styleTechHouse, second = 0;
+        float bestScore = 1.0e9f, secondScore = 1.0e9f;
         for (int st = 1; st < numStyles; ++st)
         {
             float score = styleDistance (f, profile (st));
             if (bpm > 0) score += 0.15f * tempoOutside (st, bpm);
             if (st == styleLofi && ! (f.highRatio < 0.02f && f.plr > 10.0f)) score += 5.0f;
             if (st == styleDancehall) score += 0.5f;   // very broad family (108-165 BPM edits): only when clearly closest
-            if (score < bestScore) { bestScore = score; best = st; }
+            if (score < bestScore) { secondScore = bestScore; second = best; bestScore = score; best = st; }
+            else if (score < secondScore) { secondScore = score; second = st; }
         }
+        if (runnerUp != nullptr) *runnerUp = second;
+        if (margin != nullptr) *margin = secondScore - bestScore;
         return best;
     }
 
@@ -469,7 +474,12 @@ AutoResult AutoMaster::compute (const AudioFeatures& f, int styleParam, double b
     if (! f.valid) return r;
     r.valid = true;
     r.styleWasDetected = styleParam == styleAuto;
-    r.style = r.styleWasDetected ? detectStyle (f, bpm) : juce::jlimit (1, numStyles - 1, styleParam);
+    {
+        int alt = 0; float margin = 99.0f;
+        r.style = r.styleWasDetected ? detectStyle (f, bpm, &alt, &margin) : juce::jlimit (1, numStyles - 1, styleParam);
+        // close call (calibrated on the references: flags half of the wrong detections, 1 in 6 right ones)
+        if (r.styleWasDetected && alt > 0 && margin < 0.3f) r.styleAlt = alt;
+    }
     const auto& p = profile (r.style);
     const int n = p.numTracks;
     const bool lofi = r.style == styleLofi;
@@ -481,6 +491,17 @@ AutoResult AutoMaster::compute (const AudioFeatures& f, int styleParam, double b
     if (f.hasSpectrum)
         r.report.add (fr ("Écoute : ") + juce::String (juce::roundToInt (f.durationSec)) + fr (" s, analyse sur les ") + juce::String (juce::roundToInt (f.loudSeconds))
                       + fr (" s les plus forts (même méthode que les références)"));
+    if (r.styleAlt > 0)
+        r.report.add (fr ("Style hésitant : très proche de ") + styleNames()[r.styleAlt] + fr (" — si c'est plutôt ce style, choisis-le dans STYLE et relance AUTO"));
+    if (f.hostStart >= 0.0 && f.hostEnd > f.hostStart)
+    {
+        auto mmss = [] (double t) { const int s = juce::jmax (0, (int) std::floor (t)); return juce::String (s / 60) + ":" + juce::String (s % 60).paddedLeft ('0', 2); };
+        r.report.add (fr ("Passage écouté : de ") + mmss (f.hostStart) + fr (" à ") + mmss (f.hostEnd) + fr (" dans le morceau"));
+    }
+    // A break inside the extract
+    if (f.hasSpectrum && f.quietShare > 0.2f)
+        r.report.add (fr ("L'extrait contenait un passage calme (break, ") + juce::String (juce::roundToInt (100.0f * f.quietShare))
+                      + fr (" % du temps) : pour plus de précision, relance AUTO pendant un drop"));
 
     // ---- Tonal balance: curve vs references, fitted on the EQ tools
     if (f.hasSpectrum)

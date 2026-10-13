@@ -28,4 +28,6 @@ struct AudioFeatures
     float truePeakDb = -100;
     float loudSeconds = 0;        // seconds of loud material the spectrum was built from
     float loudLufs = -70;         // loud passages: median of the 3 s short-term values above their median (like the profiles' st_drop)
+    float quietShare = 0;         // share of the listened time > 6 dB below the loud passages (a break in the extract)
+    double hostStart = -1, hostEnd = -1;   // song position (s) of the listened audio, -1 when the host gave none
 };

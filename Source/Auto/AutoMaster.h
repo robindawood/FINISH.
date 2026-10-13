@@ -18,6 +18,7 @@ struct AutoResult
     bool valid = false;
     int style = styleTechHouse;        // style used (1..6)
     bool styleWasDetected = false;
+    int styleAlt = 0;                  // detected with hesitation: the close second style (0 = clear call)
     float loudPassageTarget = -7.0f;   // LUFS short-term of the loud passages (what the closed loop holds)
     float integratedTarget = -8.5f;    // what the style's masters measure integrated (for display)
     float toneErrorBefore = 0, toneErrorAfter = -1;   // weighted RMS distance (dB) outside tolerance: mix / processed output
@@ -30,7 +31,8 @@ class AutoMaster
 {
 public:
     static const StyleProfileData& profile (int style) noexcept;   // style 1..6
-    static int detectStyle (const AudioFeatures& f, double bpm);
+    // runnerUp / margin (optional): the second closest style and how far behind it is (score units, < 0.3 = close call)
+    static int detectStyle (const AudioFeatures& f, double bpm, int* runnerUp = nullptr, float* margin = nullptr);
     // Tempo from 1 kHz rhythm envelopes (hats grid + kick), half-time folded into 100-200 BPM. 0 if unclear.
     static double estimateTempo (const std::vector<float>& low, const std::vector<float>& high, double rate);
 

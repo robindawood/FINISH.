@@ -17,6 +17,9 @@ UTILISATION RAPIDE
 2. Lance la lecture sur la partie la plus forte du morceau (drop / refrain).
 3. Clique sur AUTO et laisse jouer : WHALE écoute 30 secondes (il garde les passages les plus forts), règle la chaîne,
    puis mesure le son traité pendant environ 30 secondes et corrige ce qui reste.
+   Le rapport indique le passage écouté (ex. « de 1:02 à 1:32 ») et prévient si un break s'y trouvait :
+   relance alors AUTO pendant un drop. Si le style est hésitant, la ligne du bas affiche « (proche …) » :
+   choisis le bon style dans STYLE et relance AUTO.
 4. Compare avec SANS / AVEC (au même volume sur les passages forts : tu entends la vraie différence, pas juste « plus fort »).
    Les indicateurs à droite montrent ce que tu entends : TRUE PEAK, TONALITÉ (écart à tes références du style),
    DYNAMIQUE (vert = pas écrasé pour ta cible), STÉRÉO, GRAVES MONO.
@@ -27,3 +30,8 @@ UTILISATION RAPIDE
 La baleine : elle remonte vers la surface (la cible de volume) pendant le mastering, se dédouble s'il y a un problème
 de phase, devient orange si c'est trop fort, et souffle des étoiles quand le master est validé.
 Menu ≡ > Animations réduites pour les ordinateurs moins puissants.
+
+VERSION BÊTA
+------------
+Cette version est une bêta : elle sert à valider le son à l'oreille avant la version finale.
+Voir NOTES_BETA_FR.txt pour ce qui a changé et ce qu'il faut tester.
