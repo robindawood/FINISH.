@@ -32,6 +32,7 @@ public:
     void pull();                                                  // message thread
     Result result() const;                                        // message thread
     double capturedSeconds() const { return (double) totalSamples / sr; }
+    void keepLastSeconds (double seconds);                       // message thread: rolling window (live meters)
 
     // Shared analysis of one finished stereo buffer (offline use and tests).
     static Result analyse (const juce::AudioBuffer<float>& buffer, double sampleRate);

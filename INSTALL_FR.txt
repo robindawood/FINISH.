@@ -17,7 +17,9 @@ UTILISATION RAPIDE
 2. Lance la lecture sur la partie la plus forte du morceau (drop / refrain).
 3. Clique sur AUTO et laisse jouer : WHALE écoute 30 secondes (il garde les passages les plus forts), règle la chaîne,
    puis mesure le son traité pendant environ 30 secondes et corrige ce qui reste.
-4. Compare avec SANS / AVEC (au même volume : tu entends la vraie différence, pas juste « plus fort »).
+4. Compare avec SANS / AVEC (au même volume sur les passages forts : tu entends la vraie différence, pas juste « plus fort »).
+   Les indicateurs à droite montrent ce que tu entends : TRUE PEAK, TONALITÉ (écart à tes références du style),
+   DYNAMIQUE (vert = pas écrasé pour ta cible), STÉRÉO, GRAVES MONO.
 5. Ajuste avec les 8 boutons (0 = le choix d'AUTO), ou choisis un preset.
 6. EXPERT : réglages détaillés de chaque module + RAPPORT AUTO (ce qui a été fait, et pourquoi).
 

@@ -43,6 +43,8 @@ void WhaleAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     outAnalyzer.prepare (sampleRate);
     inCap.prepare (sampleRate);
     outCap.prepare (sampleRate);
+    liveCap.prepare (sampleRate); liveCap.start();
+    toneDistance.store (-1.0f);
     setLatencySamples (dsp.getLatencySamples());
 }
 
@@ -69,6 +71,7 @@ WhaleDSP::Settings WhaleAudioProcessor::buildSettings() noexcept
 
     s.bypass = pBypass->load() > 0.5f;
     s.matchAB = pMatch->load() > 0.5f;
+
     if (on[0])
         for (int b = 0; b < 4; ++b)
         {
@@ -88,6 +91,9 @@ WhaleDSP::Settings WhaleAudioProcessor::buildSettings() noexcept
     if (on[5]) s.clip = juce::jlimit (0.0f, 1.0f, pClip->load() * (0.5f + 0.5f * dos));
     s.ceilingDb = pCeil->load();
 
+    // loud-passage reference of the input: rolling (last 30 s), but never below what AUTO measured on the drop, so a
+    // long breakdown does not become the new reference (loudness loop and A/B match)
+    s.loudInputLufs = std::max (inputLoudPassage.load(), autoInputLoudRef.load());
     const int t = (int) pTarget->load();
     if (t == manualTarget)
         s.driveDb = pManual->load() + 6.0f * m (mLoud);
@@ -97,9 +103,6 @@ WhaleDSP::Settings WhaleAudioProcessor::buildSettings() noexcept
     {
         s.autoLoudness = true;
         s.targetLufs = effectiveTarget.load() + 6.0f * m (mLoud);
-        // loud-passage reference: rolling (last 30 s), but never below what AUTO measured on the drop, so a long
-        // breakdown does not become the new reference
-        s.loudInputLufs = std::max (inputLoudPassage.load(), autoInputLoudRef.load());
         s.driveDb = driveFF.load() + 6.0f * m (mLoud);
     }
     return s;
@@ -129,6 +132,8 @@ void WhaleAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::
     outAnalyzer.process (buffer.getReadPointer (0), nc > 1 ? buffer.getReadPointer (1) : nullptr, ns);
     if (sound) outCap.push (buffer.getReadPointer (0), nc > 1 ? buffer.getReadPointer (1) : nullptr, ns);
     else       outCap.markGap();
+    if (sound) liveCap.push (buffer.getReadPointer (0), nc > 1 ? buffer.getReadPointer (1) : nullptr, ns);
+    else       liveCap.markGap();
 }
 
 // ------------------------------------------------------------------------------------------------- AUTO
@@ -320,11 +325,13 @@ void WhaleAudioProcessor::timerCallback()
             }
         while ((got = outAnalyzer.readFrames (buf, 64)) > 0)
             for (int i = 0; i < got; ++i)
+            {
                 if (buf[i].lufs() > AnalysisSession::silenceLufs)
                 {
                     recentOut.push_back (buf[i]);
                     if (autoState == AutoState::verifying && verifyPhase >= 1 && verifyGateOpen) verifyOutFrames.push_back (buf[i]);
                 }
+            }
         float lo[512], hi[512];
         while ((got = inAnalyzer.readEnvelopes (lo, hi, 512)) > 0)
             if (autoState == AutoState::listening && dsp.getInputLoudness() > -50.0f && envLow.size() < 20000)
@@ -335,6 +342,8 @@ void WhaleAudioProcessor::timerCallback()
         if (recentIn.size() > 300) recentIn.erase (recentIn.begin(), recentIn.begin() + (long) (recentIn.size() - 300));
         if (recentOut.size() > 1200) recentOut.erase (recentOut.begin(), recentOut.begin() + (long) (recentOut.size() - 1200));
     }
+    liveCap.pull();                                   // every tick: the FIFO holds < 1 s at 192 kHz
+    if (++toneTick >= 30) { toneTick = 0; updateToneMeter(); }
 
     // Loud-passage loudness of the input (90th percentile of 3 s short-term over the last 30 s).
     if (recentIn.size() > 30)
@@ -560,6 +569,24 @@ void WhaleAudioProcessor::finishListening()
     verifySeconds = 0.0; grAcc = 0.0; grCount = 0;
     verifyGateOpen = false; verifyPhaseWall = 0.0;
     presets.setCurrent (-1);
+}
+
+// ------------------------------------------------------------------------------------------------- indicators, A/B
+
+void WhaleAudioProcessor::updateToneMeter()
+{
+    liveCap.keepLastSeconds (20.0);
+    const auto r = liveCap.result();
+    if (! r.valid || r.loudSeconds < 4.0) { toneDistance.store (-1.0f); return; }
+    AudioFeatures f;
+    f.valid = f.hasSpectrum = true;
+    for (int b = 0; b < 29; ++b) f.thirdOctDb[b] = r.thirdOctDb[b] - (characterIndex >= 0 ? charCurve[b] : 0.0f);
+    toneDistance.store (AutoMaster::analyseTone (f, AutoMaster::profile (getActiveStyle()), 1.0f).error);
+}
+
+float WhaleAudioProcessor::getExpectedCrest() const
+{
+    return pCeil->load() - (effectiveTarget.load() + 6.0f * (pM[7]->load() - 0.5f));
 }
 
 // ------------------------------------------------------------------------------------------------- state

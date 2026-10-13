@@ -11,7 +11,8 @@ Mastering plug-in (VST3 / AU / Standalone, macOS + Windows) built with JUCE 8.
 - **Presets**: factory presets are a character layered on AUTO (colour built from the style's reference spread, punch / saturation / density / loudness signature); AUTO's correction is kept.
 - **Chain**: LOW-CUT (36 dB/oct, set by AUTO) → SPECTRAL (4 dynamic bells, movable centres) → COMPRESSION (punch + 3-band leveller) → BASSES/AIR → LARGEUR (sides + mono bass)
   → x4 oversampled SATURATION + CLIPPER → true-peak look-ahead LIMITEUR. Linear-phase oversampling, ~2.9 ms latency at 44.1 kHz.
-- **Main screen**: 8 macros (0 = AUTO's choice), style / target / dosage, presets (25 factory + user presets), level-matched SANS/AVEC.
+- **Main screen**: 8 macros (0 = AUTO's choice), style / target / dosage, presets (30 factory + user presets), SANS/AVEC level-matched on the loud passages.
+- **Meters** (what is heard): 4x true peak, TONALITÉ (distance to the style's references, preset colour excluded), DYNAMIQUE (vs what the target leaves), stereo correlation, measured bass mono.
 - **The whale**: drawn from the sound (each line = a band), rises to the target surface, breaks through when too loud,
   ghost double on phase problems, sparks when clipping, "le souffle" when the master is validated.
 

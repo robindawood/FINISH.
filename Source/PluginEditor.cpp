@@ -112,7 +112,7 @@ void WhaleEditor::layout()
 {
     scene.setBounds (0, 56, designW, 452);
     presetBar.setBounds (390, 11, 420, 36);
-    ab.setBounds (900, 12, 150, 34);
+    ab.setBounds (900, 12, 150, 47);
     expertLink.setBounds (1062, 12, 80, 34);
     menuLink.setBounds (1148, 12, 40, 34);
     chain.setBounds (20, 516, 1160, 40);
@@ -122,7 +122,7 @@ void WhaleEditor::layout()
     dosage.setBounds (206, 716, 158, 20);
     for (int i = 0; i < 8; ++i)
         knobs[(size_t) i]->setBounds (400 + i * 72 + (i >= 4 ? 30 : 0), 600, 64, 98);
-    meters.setBounds (1000, 590, 180, 150);
+    meters.setBounds (1000, 584, 180, 158);
     expert.setBounds (14, 62, designW - 28, 440);
     browser.setBounds (0, 50, designW, designH - 50);
 }
@@ -212,24 +212,43 @@ void WhaleEditor::timerCallback()
     auto& d = proc.getDSP();
 
     // ---- meters
-    const float pk = d.takeMaxPeakDb();
+    const float pk = d.takeMaxPeakDb();                 // 4x true peak of what is heard (after SANS / AVEC)
     tpHoldAge += dt; peak10Age += dt;
     if (pk > tpHold || tpHoldAge > 2.0f) { tpHold = pk; tpHoldAge = 0; }
     if (pk > peak10 || peak10Age > 10.0f) { peak10 = pk; peak10Age = 0; }
-    const float outSt = d.getOutputLoudness();
-    lufsSmooth = outSt < -60 ? outSt : lufsSmooth + (outSt - lufsSmooth) * 0.08f;
+    const float heard = d.getHeardLoudness();
+    lufsSmooth = heard < -60 ? heard : lufsSmooth + (heard - lufsSmooth) * 0.08f;
     const bool sound = d.getInputLoudness() > -50.0f;
     const float ceil = proc.state.getRawParameterValue (PID::ceiling)->load();
-    const float plr = peak10 - outSt;
+    const bool dry = proc.state.getRawParameterValue (PID::bypass)->load() > 0.5f;
+    const float plr = peak10 - heard;
     const float corr = d.getCorrelation();
-    const bool monoOn = proc.state.getRawParameterValue (PID::widthOn)->load() > 0.5f && proc.state.getRawParameterValue (PID::widthMono)->load() >= 20.0f;
-    std::array<MeterPanel::Row, 4> rows;
-    rows[0] = { "TRUE PEAK", sound ? juce::String (tpHold, 1) + " dBTP" : "--", juce::jlimit (0.0f, 1.0f, (tpHold + 24.0f) / 24.0f), tpHold > ceil + 0.15f ? red : green };
-    rows[1] = { "DYNAMIQUE", sound ? juce::String (plr, 1) + " dB" : "--", juce::jlimit (0.0f, 1.0f, plr / 14.0f), plr < 5.0f ? red : plr < 7.0f ? orange : green };
-    rows[2] = { fr ("STÉRÉO"), sound ? (corr >= 0 ? "+" : "") + juce::String (corr, 2) : "--", juce::jlimit (0.0f, 1.0f, (corr + 1.0f) * 0.5f), corr < 0.0f ? red : corr < 0.25f ? orange : green };
-    rows[3] = { "MONO < " + juce::String (monoOn ? juce::roundToInt (proc.state.getRawParameterValue (PID::widthMono)->load()) : 120) + " Hz",
-                monoOn ? juce::String ("OK") : fr ("LIBRE"), monoOn ? 1.0f : 0.4f, monoOn ? green : orange };
+    const float monoPct = 100.0f * d.getBassMono();
+    const float tone = proc.getToneDistance();
+    const float expCrest = proc.getExpectedCrest();
+    std::array<MeterPanel::Row, MeterPanel::numRows> rows;
+    rows[0] = { "TRUE PEAK", sound ? juce::String (tpHold, 1) + " dBTP" : "--", juce::jlimit (0.0f, 1.0f, (tpHold + 24.0f) / 24.0f),
+                (! dry && tpHold > ceil + 0.1f) || tpHold > 0.0f ? red : green };
+    // distance of the heard 1/3-octave balance to the style's references (the preset's colour is not counted)
+    rows[1] = { fr ("TONALITÉ"), (sound && tone >= 0) ? juce::String (tone, 1) + " dB" : "--", tone < 0 ? 0.0f : juce::jlimit (0.0f, 1.0f, 1.0f - tone / 3.0f),
+                tone < 0 ? dim : tone < 1.0f ? green : tone < 2.0f ? orange : red };
+    // peak-to-loudness vs what the loudness target leaves: lower = squashed
+    rows[2] = { "DYNAMIQUE", sound ? juce::String (plr, 1) + " dB" : "--", juce::jlimit (0.0f, 1.0f, plr / 14.0f),
+                dry ? cyan : plr >= expCrest - 1.0f ? green : plr >= expCrest - 2.5f ? orange : red };
+    rows[3] = { fr ("STÉRÉO"), sound ? (corr >= 0 ? "+" : "") + juce::String (corr, 2) : "--", juce::jlimit (0.0f, 1.0f, (corr + 1.0f) * 0.5f),
+                corr < 0.0f ? red : corr < 0.25f ? orange : green };
+    rows[4] = { "GRAVES MONO", sound ? juce::String (juce::roundToInt (monoPct)) + " %" : "--", juce::jlimit (0.0f, 1.0f, monoPct / 100.0f),
+                monoPct >= 90.0f ? green : monoPct >= 75.0f ? orange : red };
+    if (! sound)
+        for (auto& r : rows) { r.bar = 0.0f; r.colour = dim; }        // nothing heard: no verdict on the meters
     meters.setRows (rows);
+    {
+        const bool match = proc.state.getRawParameterValue (PID::match)->load() > 0.5f;
+        const float g = d.getMatchGainDb();
+        ab.setCaption (! match ? fr ("SANS au volume d'origine")
+                               : (proc.isMatchMeasured() ? fr ("SANS à volume égal (") + (g >= 0 ? "+" : "") + juce::String (g, 1) + " dB)"
+                                                         : fr ("SANS à volume égal (mesure…)")));
+    }
 
     // ---- chain activity
     float spec = 0; for (int b = 0; b < 4; ++b) spec = std::max (spec, d.getSpecDynDb (b));

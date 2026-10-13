@@ -166,9 +166,57 @@ namespace
         CHECK (std::abs (out - p.getEffectiveTarget()) < 1.0f, "closed loop holds the target within 1 dB");
         setParam (p, PID::bypass, 1.0f);
         run (p, gen, 6.0);
-        const float byp = p.getDSP().getOutputLoudness();
-        std::cout << "    bypass (SANS) loudness " << byp << " LUFS\n";
-        CHECK (std::abs (byp - out) < 1.0f, "SANS is played at the same loudness as AVEC");
+        const float byp = p.getDSP().getHeardLoudness();     // what is HEARD (the old test read the processed path)
+        std::cout << "    bypass (SANS) heard loudness " << byp << " LUFS, match gain " << p.getDSP().getMatchGainDb() << " dB\n";
+        CHECK (std::abs (byp - out) < 0.7f, "SANS is played at the same loudness as AVEC (within 0.7 dB)");
+        CHECK (p.isMatchMeasured(), "A/B match measured");
+    }
+
+    void testIndicators()
+    {
+        std::cout << "Indicators (what is heard)\n";
+        // true peak: a sine at fs/4 sampled at 45 degrees has samples at 0.707 but a true peak of 1.0 (0 dBTP)
+        {
+            WhaleDSP d; d.prepare (sr, block, 2);
+            WhaleDSP::Settings s; s.bypass = true; s.matchAB = false;
+            juce::AudioBuffer<float> b (2, block);
+            double ph = juce::MathConstants<double>::pi / 4;
+            float tp = -100;
+            for (int k = 0; k < 40; ++k)
+            {
+                for (int i = 0; i < block; ++i) { const float v = (float) std::sin (ph); ph += juce::MathConstants<double>::halfPi; b.setSample (0, i, v); b.setSample (1, i, v); }
+                d.process (b, s);
+                tp = std::max (tp, d.takeMaxPeakDb());
+            }
+            std::cout << "    sine fs/4 at 45 deg (sample peak -3 dB): meter " << tp << " dBTP\n";
+            CHECK (tp > -0.6f && tp < 0.3f, "TRUE PEAK meter reads the inter-sample peak");
+        }
+        // bass mono: 60 Hz in phase vs in opposition
+        auto bassMono = [] (bool opposite)
+        {
+            WhaleDSP d; d.prepare (sr, block, 2);
+            WhaleDSP::Settings s; s.bypass = true; s.matchAB = false;
+            juce::AudioBuffer<float> b (2, block);
+            double ph = 0;
+            for (int k = 0; k < (int) (2.0 * sr / block); ++k)
+            {
+                for (int i = 0; i < block; ++i) { const float v = 0.3f * (float) std::sin (ph); ph += 2 * juce::MathConstants<double>::pi * 60.0 / sr; b.setSample (0, i, v); b.setSample (1, i, opposite ? -v : v); }
+                d.process (b, s);
+            }
+            return d.getBassMono();
+        };
+        const float monoIn = bassMono (false), monoOpp = bassMono (true);
+        std::cout << "    bass mono: in phase " << monoIn * 100 << " %, opposite " << monoOpp * 100 << " %\n";
+        CHECK (monoIn > 0.98f && monoOpp < 0.05f, "GRAVES MONO measures the low end");
+        // tonality: available after some playing, finite
+        {
+            WhaleAudioProcessor p; p.prepareToPlay (sr, block);
+            setParam (p, PID::style, (float) styleTechHouse);
+            MixGen gen; gen.gainDb = -14.0f;
+            run (p, gen, 25.0);
+            std::cout << "    TONALITE on the synthetic mix: " << p.getToneDistance() << " dB, expected crest " << p.getExpectedCrest() << " dB\n";
+            CHECK (p.getToneDistance() >= 0.0f && p.getToneDistance() < 20.0f, "TONALITE meter measured after 25 s");
+        }
     }
 
     void testSpectralCapture()
@@ -442,7 +490,7 @@ namespace
             juce::AudioFormatManager fm; fm.registerBasicFormats();
             reader.reset (fm.createReaderFor (f));
             if (reader == nullptr) return false;
-            pos = (juce::int64) (startSec * reader->sampleRate);
+            pos = std::min ((juce::int64) (startSec * reader->sampleRate), reader->lengthInSamples / 4);   // short files: start early
             return true;
         }
     };
@@ -579,6 +627,7 @@ int main (int argc, char** argv)
     testTransparency();
     testCeiling();
     testLoudnessLoopAndAB();
+    testIndicators();
     testSpectralCapture();
     testAutoProfiles();
     testLowCut();

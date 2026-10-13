@@ -60,6 +60,10 @@ public:
     float getLoudnessError() const;                                       // out short-term - target (dB)
     int getSouffleCount() const { return souffleCount; }                  // increments once per validated AUTO
     float getOutputIntegrated() const { return outIntegrated; }
+    // ---- Indicators (what is heard)
+    float getToneDistance() const { return toneDistance.load(); }    // dB outside the style's references, -1 = not enough heard yet
+    float getExpectedCrest() const;                                  // peak-to-loudness the target leaves (ceiling - target)
+    bool isMatchMeasured() const { return dsp.isMatchReady(); }
     bool isTargetLoudnessMode() const;
 
     // Factory presets are a CHARACTER layered on AUTO's CORRECTION: choosing one keeps what AUTO fixed (tonal balance,
@@ -83,6 +87,10 @@ private:
     AudioAnalyzer inAnalyzer, outAnalyzer;
     AnalysisSession autoSession;
     SpectralCapture inCap, outCap;                       // AUTO: spectra measured like the reference profiles
+    SpectralCapture liveCap;                             // live TONALITÉ meter: rolling 20 s of what is heard
+    std::atomic<float> toneDistance { -1.0f };
+    int toneTick = 0;
+    void updateToneMeter();
     std::vector<AnalysisFrame> verifyOutFrames;          // output loudness frames during a verification capture
     std::atomic<bool> capInput { false };                // audio thread: block is not silence
     std::vector<AnalysisFrame> recentIn, recentOut;     // rolling windows (message thread)

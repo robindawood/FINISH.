@@ -74,10 +74,11 @@ class MeterPanel : public juce::Component
 {
 public:
     struct Row { juce::String label, value; float bar = 0; juce::Colour colour = Theme::green; };
-    void setRows (const std::array<Row, 4>& r) { rows = r; repaint(); }
+    static constexpr int numRows = 5;
+    void setRows (const std::array<Row, numRows>& r) { rows = r; repaint(); }
     void paint (juce::Graphics&) override;
 private:
-    std::array<Row, 4> rows;
+    std::array<Row, numRows> rows;
 };
 
 // Preset bar: < * name  CATEGORY | PRESETS v | >
@@ -102,7 +103,9 @@ public:
     ~ABSwitch() override;
     void paint (juce::Graphics&) override;
     void mouseUp (const juce::MouseEvent&) override;
+    void setCaption (const juce::String& c) { if (c != caption) { caption = c; repaint(); } }
 private:
+    juce::String caption;          // under the switch: how SANS is levelled
     void parameterChanged (const juce::String&, float) override { juce::MessageManager::callAsync ([sp = juce::Component::SafePointer<ABSwitch> (this)] { if (sp) sp->repaint(); }); }
     juce::AudioProcessorValueTreeState& state;
 };

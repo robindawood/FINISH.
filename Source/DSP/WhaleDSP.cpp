@@ -107,8 +107,9 @@ void WhaleDSP::prepare (double sampleRate, int maxBlockSize, int numChannels)
     dryLen = osLatency + lookahead + 1;
     for (int c = 0; c < 2; ++c) dryRing[c].assign ((size_t) dryLen, 0.0f);
 
-    kIn.prepare (sr); kOut.prepare (sr);
-    matchCoef = envCoeff (sr, 3.0);
+    kIn.prepare (sr); kOut.prepare (sr); kHeard.prepare (sr);
+    bassMidLp.setLowPass (sr, 120.0, 0.7071); bassSideLp.setLowPass (sr, 120.0, 0.7071);
+    matchCoef = envCoeff (sr, 8.0);
     shortCoef = envCoeff (sr, 1.5);
     momCoef = envCoeff (sr, 0.2);
     matchSmoothCoef = envCoeff (sr, 0.3);
@@ -166,7 +167,9 @@ void WhaleDSP::reset()
     rampPos = 0;
     kIn.reset(); kOut.reset();
     pIn = pOut = pInShort = pOutShort = pOutMom = 0.0f;
-    matchGain = 1.0f;
+    pHeardShort = 0.0f; kHeard.reset(); std::memset (tpmHist, 0, sizeof (tpmHist)); tpmPos = 0;
+    bassMidLp.reset(); bassSideLp.reset(); accBassMid = accBassSide = 0.0f;
+    matchGain = 1.0f; matchSeconds = 0.0f;
     corrDb = 0.0f;
     peakHoldDb = -100.0f;
     accLR = accLL = accRR = accMid = accSide = 0.0f;
@@ -183,7 +186,7 @@ void WhaleDSP::process (juce::AudioBuffer<float>& buffer, const Settings& s) noe
     // Closed-loop loudness: while the loud passages play, nudge the drive until they sit on the target.
     // Only the loud passages of the INPUT drive the loop: otherwise a breakdown pulls the gain up (up to +8 dB), the
     // next drop comes out several dB too loud and the song's sections get flattened.
-    if (s.autoLoudness && ! s.bypass)
+    if (s.autoLoudness)   // also while SANS is heard: the processed path keeps running and stays on target
     {
         const float outShort = powerToLufs (pOutShort), inShort = powerToLufs (pInShort);
         const float err = s.targetLufs - outShort;
@@ -279,6 +282,7 @@ void WhaleDSP::process (juce::AudioBuffer<float>& buffer, const Settings& s) noe
     outLufs.store (powerToLufs (pOutShort));
     outMomentary.store (powerToLufs (pOutMom));
     matchDb.store (gainToDb (matchGain));
+    matchReady.store (matchSeconds > 3.0f);
 }
 
 void WhaleDSP::HpD::set (double sampleRate, double f, double q) noexcept
@@ -510,7 +514,7 @@ void WhaleDSP::stageB (juce::dsp::AudioBlock<float>& block, const Settings&) noe
 void WhaleDSP::stageC (float* L, float* R, int n, const Settings& s) noexcept
 {
     const int W = lookahead + 1;
-    float blockGr = 0.0f, blockTp = 0.0f;
+    float blockGr = 0.0f, blockTp = 0.0f, blockTpHeard = 0.0f;
     const float ceil = dbToGain (sCeil.getCurrentValue());
     for (int i = 0; i < n; ++i)
     {
@@ -578,13 +582,19 @@ void WhaleDSP::stageC (float* L, float* R, int n, const Settings& s) noexcept
             pInShort = shortCoef * pInShort + (1 - shortCoef) * powIn;
             pOutShort = shortCoef * pOutShort + (1 - shortCoef) * powOut;
             pOutMom = momCoef * pOutMom + (1 - momCoef) * powOut;
-            if (pInShort > 1.0e-7f)
+            // A/B level match on the LOUD passages (input within 8 dB of its loud level), long memory (~8 s): the dry
+            // is compared at the same loudness where it matters, without following every breakdown. The processed
+            // path keeps running while SANS is heard, so the match stays right even just after a preset change.
+            const float inShortLufs = powerToLufs (pInShort);
+            const float gateLevel = s.loudInputLufs > -90.0f ? s.loudInputLufs - 8.0f : -50.0f;
+            if (pInShort > 1.0e-7f && inShortLufs >= gateLevel)
             {
                 pIn = matchCoef * pIn + (1 - matchCoef) * powIn;
                 pOut = matchCoef * pOut + (1 - matchCoef) * powOut;
+                matchSeconds += 1.0f / (float) sr;
             }
-            float target = 1.0f;
-            if (pIn > 1.0e-9f && pOut > 1.0e-9f)
+            float target = matchGain;
+            if (pIn > 1.0e-9f && pOut > 1.0e-9f && matchSeconds > 1.0f)
                 target = juce::jlimit (dbToGain (-24.0f), dbToGain (24.0f), std::sqrt (pOut / pIn));
             matchGain = matchSmoothCoef * matchGain + (1 - matchSmoothCoef) * target;
         }
@@ -593,6 +603,25 @@ void WhaleDSP::stageC (float* L, float* R, int n, const Settings& s) noexcept
         const float gm = s.matchAB ? matchGain : 1.0f;
         ol += byp * (ddl * gm - ol);
         orr += byp * (ddr * gm - orr);
+
+        // What is heard: loudness, 4x true peak, low end mono
+        {
+            const float h0 = kHeard.process (ol, 0), h1 = kHeard.process (orr, 1);
+            pHeardShort = shortCoef * pHeardShort + (1 - shortCoef) * (h0 * h0 + h1 * h1);
+            tpmHist[0][tpmPos] = ol; tpmHist[1][tpmPos] = orr;
+            for (int c = 0; c < 2; ++c)
+                for (int ph = 0; ph < 4; ++ph)
+                {
+                    float acc = 0;
+                    int idx = tpmPos;
+                    for (int k = 0; k < tpTaps; ++k) { acc += tpCoef[ph][k] * tpmHist[c][idx]; if (--idx < 0) idx = tpTaps - 1; }
+                    blockTpHeard = std::max (blockTpHeard, std::abs (acc));
+                }
+            if (++tpmPos >= tpTaps) tpmPos = 0;
+            const float bm = bassMidLp.process (0.5f * (ol + orr), 0), bs = bassSideLp.process (0.5f * (ol - orr), 0);
+            accBassMid = statCoef * accBassMid + (1 - statCoef) * bm * bm;
+            accBassSide = statCoef * accBassSide + (1 - statCoef) * bs * bs;
+        }
 
         // Output analysis for the visuals and meters
         {
@@ -620,10 +649,13 @@ void WhaleDSP::stageC (float* L, float* R, int n, const Settings& s) noexcept
     grDb.store (std::max (grDb.load(), blockGr));
     for (int k = 0; k < 3; ++k) bandGrOut[(size_t) k].store (bandGr[k]);
     for (int b = 0; b < 4; ++b) specDynOut[(size_t) b].store (specCut[b]);
-    peakHoldDb = std::max (peakHoldDb, gainToDb (blockTp));
+    peakHoldDb = std::max (peakHoldDb, gainToDb (blockTpHeard));      // meters: TRUE peak of what is heard
     truePeakDb.store (std::max (truePeakDb.load(), peakHoldDb));
+    heardLufs.store (powerToLufs (pHeardShort));
+    bassMonoOut.store ((accBassMid + accBassSide) > 1.0e-10f ? accBassMid / (accBassMid + accBassSide) : 1.0f);
+    juce::ignoreUnused (blockTp);
     {
-        const float blockDb = gainToDb (blockTp);
+        const float blockDb = gainToDb (blockTpHeard);
         float prev = maxPeakDb.load();
         while (blockDb > prev && ! maxPeakDb.compare_exchange_weak (prev, blockDb)) {}
     }

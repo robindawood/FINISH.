@@ -47,12 +47,16 @@ public:
     float getTruePeakDb() const noexcept         { return truePeakDb.load(); }
     float takeMaxPeakDb() noexcept               { return maxPeakDb.exchange (-100.0f); }
     float getMatchGainDb() const noexcept        { return matchDb.load(); }
+    bool isMatchReady() const noexcept           { return matchReady.load(); }
     float getLoudnessCorrectionDb() const noexcept { return corrDbOut.load(); }
     float getBandGrDb (int b) const noexcept     { return bandGrOut[(size_t) juce::jlimit (0, 2, b)].load(); }
     float getSpecDynDb (int b) const noexcept    { return specDynOut[(size_t) juce::jlimit (0, 3, b)].load(); }
     float getClipDb() const noexcept             { return clipOut.load(); }
     float getCorrelation() const noexcept        { return corrOut.load(); }
     float getWidth() const noexcept              { return widthOut.load(); }      // side / (mid + side), output
+    // What is HEARD (after the A/B switch): loudness, 4x true peak, low end in mono
+    float getHeardLoudness() const noexcept      { return heardLufs.load(); }      // short-term (~3 s)
+    float getBassMono() const noexcept           { return bassMonoOut.load(); }    // 1 = the low end (< 120 Hz) is fully mono
     float getVisBand (int b) const noexcept      { return visOut[(size_t) juce::jlimit (0, numVisBands - 1, b)].load(); }   // dB
     float getKick() const noexcept               { return kickOut.load(); }       // 0..1 low-end hit envelope
     static float visBandHz (int b) noexcept;
@@ -140,7 +144,15 @@ private:
     std::vector<float> dryNow[2], monoWork;
 
     // Loudness + A/B match + output analysis for the visuals
-    KWeighting kIn, kOut;
+    KWeighting kIn, kOut, kHeard;
+    float pHeardShort = 0;
+    float tpmHist[2][tpTaps] {};
+    int tpmPos = 0;
+    Biquad bassMidLp, bassSideLp;
+    float accBassMid = 0, accBassSide = 0;
+    std::atomic<float> heardLufs { -70.0f }, bassMonoOut { 1.0f };
+    float matchSeconds = 0.0f;
+    std::atomic<bool> matchReady { false };
     float pIn = 0, pOut = 0, pInShort = 0, pOutShort = 0, pOutMom = 0, matchCoef = 0, shortCoef = 0, momCoef = 0;
     float matchGain = 1.0f, matchSmoothCoef = 0, peakHoldDb = -100.0f, corrDb = 0.0f;
     float accLR = 0, accLL = 0, accRR = 0, accMid = 0, accSide = 0, statCoef = 0;

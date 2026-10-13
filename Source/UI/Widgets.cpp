@@ -302,18 +302,18 @@ void ChainStrip::mouseUp (const juce::MouseEvent& e)
 
 void MeterPanel::paint (juce::Graphics& g)
 {
-    const float rowH = (float) getHeight() / 4.0f;
-    for (int i = 0; i < 4; ++i)
+    const float rowH = (float) getHeight() / (float) numRows;
+    for (int i = 0; i < numRows; ++i)
     {
         const auto& r = rows[(size_t) i];
         const float y = (float) i * rowH;
         g.setColour (juce::Colour (0xffb2a6d6));
-        g.setFont (bold (13.0f));
-        g.drawText (r.label, juce::Rectangle<float> (0, y, (float) getWidth() * 0.6f, rowH - 12), juce::Justification::bottomLeft);
+        g.setFont (bold (12.0f));
+        g.drawText (r.label, juce::Rectangle<float> (0, y, (float) getWidth() * 0.62f, rowH - 8), juce::Justification::bottomLeft);
         g.setColour (r.colour);
-        g.setFont (mono (14.0f));
-        g.drawText (r.value, juce::Rectangle<float> (0, y, (float) getWidth(), rowH - 12), juce::Justification::bottomRight);
-        const juce::Rectangle<float> bar (0, y + rowH - 8, (float) getWidth(), 4);
+        g.setFont (mono (13.0f));
+        g.drawText (r.value, juce::Rectangle<float> (0, y, (float) getWidth(), rowH - 8), juce::Justification::bottomRight);
+        const juce::Rectangle<float> bar (0, y + rowH - 6, (float) getWidth(), 3);
         g.setColour (line);
         g.fillRoundedRectangle (bar, 2.0f);
         g.setColour (r.colour.withAlpha (0.85f));
@@ -380,7 +380,12 @@ ABSwitch::~ABSwitch() { state.removeParameterListener (PID::bypass, this); }
 
 void ABSwitch::paint (juce::Graphics& g)
 {
-    const auto r = getLocalBounds().toFloat().reduced (0.5f);
+    auto all = getLocalBounds().toFloat();
+    const auto capArea = all.removeFromBottom (13.0f);
+    g.setColour (dim);
+    g.setFont (mono (9.5f));
+    g.drawText (caption, capArea, juce::Justification::centred);
+    const auto r = all.reduced (0.5f);
     const bool bypass = state.getRawParameterValue (PID::bypass)->load() > 0.5f;
     g.setColour (juce::Colour (0xee0e0920));
     g.fillRoundedRectangle (r, 8.0f);
@@ -400,6 +405,7 @@ void ABSwitch::paint (juce::Graphics& g)
 void ABSwitch::mouseUp (const juce::MouseEvent& e)
 {
     auto* p = state.getParameter (PID::bypass);
+    if (e.position.y > (float) getHeight() - 13.0f) return;   // caption
     const bool wantBypass = e.position.x < (float) getWidth() * 0.5f;
     p->beginChangeGesture();
     p->setValueNotifyingHost (wantBypass ? 1.0f : 0.0f);

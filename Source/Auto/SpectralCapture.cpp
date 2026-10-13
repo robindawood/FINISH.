@@ -250,3 +250,9 @@ SpectralCapture::Result SpectralCapture::analyse (const juce::AudioBuffer<float>
     }
     return c.result();
 }
+
+void SpectralCapture::keepLastSeconds (double seconds)
+{
+    const size_t keep = (size_t) std::max (4.0, seconds * sr / hop);
+    if (frames.size() > keep) frames.erase (frames.begin(), frames.begin() + (long) (frames.size() - keep));
+}
