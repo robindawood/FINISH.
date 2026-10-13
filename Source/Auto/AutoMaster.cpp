@@ -622,13 +622,14 @@ AutoResult AutoMaster::compute (const AudioFeatures& f, int styleParam, double b
             {
                 b.clipAmt = juce::jlimit (0.05f, hard ? 0.85f : 0.75f, 0.05f + 0.065f * reduce);
                 b.compGlue = reduce > 6.0f ? juce::jlimit (0.2f, 0.5f, 0.15f + 0.03f * reduce) : 0.2f;
-                b.compPunch = 0.2f;
+                b.compPunch = 0.1f;   // punch v2 is strong: AUTO stays neutral, the presets bring the character
             }
             r.report.add (fr ("Dynamique : crêtes à ") + juce::String (crestIn, 1) + fr (" dB au-dessus du volume des passages forts ; pour ") + juce::String (r.loudPassageTarget, 1)
                           + fr (" LUFS sous ") + juce::String (ceilingDb, 1) + fr (" dBTP il faut ") + juce::String (crestOut, 1) + fr (" dB → ") + juce::String (std::max (0.0f, reduce), 1)
                           + fr (" dB à absorber : compression ") + pct (b.compGlue) + ", clipper " + pct (b.clipAmt) + fr (", le limiteur fait le reste"));
         }
-        b.satDrive = lofi ? 0.3f : (hard ? 0.25f : 0.15f);
+        b.satDrive = 0.0f;   // AUTO corrects and stays clean (measured: saturation pulls the low end away from the references);
+                             // the colour (saturation, punch) is the presets' job, layered on top
     }
 
     if (targetIndex == styleTarget)

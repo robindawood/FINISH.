@@ -68,11 +68,11 @@ void ExpertPanel::build()
             break;
         case 1:
             addRow (PID::compGlue, "GLUE", fr ("tient les pics de chaque bande"), magenta);
-            addRow (PID::compPunch, "PUNCH", fr ("renforce les attaques"), magenta);
+            addRow (PID::compPunch, "PUNCH", fr ("kick devant, queue du grave resserrée"), magenta);
             addRow (PID::compDetail, fr ("DÉTAIL"), fr ("attaque plus lente = plus de transitoires"), cyan);
             break;
         case 2:
-            addRow (PID::satDrive, "DRIVE", fr ("densité + chaleur"), violet);
+            addRow (PID::satDrive, "DRIVE", fr ("chaleur : harmoniques sur basses et bas-médium"), violet);
             break;
         case 3:
             addRow (PID::widthSide, fr ("CÔTÉS"), fr ("largeur au-dessus des graves"), cyan, true);

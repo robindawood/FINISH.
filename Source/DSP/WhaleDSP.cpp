@@ -38,6 +38,15 @@ void WhaleDSP::prepare (double sampleRate, int maxBlockSize, int numChannels)
     // COMPRESSION
     fastAtt = envCoeff (sr, 0.0005); fastRel = envCoeff (sr, 0.030);
     slowAtt = envCoeff (sr, 0.020);  slowRel = envCoeff (sr, 0.150);
+    punchLp.setLowPass (sr, 150.0, 0.7071);
+    punchSplit.setLowPass (sr, 180.0, 0.7071);
+    kFastAtt = envCoeff (sr, 0.0008); kFastRel = envCoeff (sr, 0.045);
+    kSlowAtt = envCoeff (sr, 0.030);  kSlowRel = envCoeff (sr, 0.250);
+    punchSmooth = envCoeff (sr, 0.0015);
+    satPre.setLowShelf (sr * 4.0, 250.0, 4.5);     // stage B runs x4 oversampled
+    satEnvCoef = envCoeff (sr * 4.0, 0.3); satEnv = 0.0f;
+    satSplit.setLowPass (sr * 4.0, 1500.0, 0.7071);
+    satPost.setLowShelf (sr * 4.0, 250.0, -4.5);
     for (auto* b : { &xLow1a, &xLow1b }) b->setLowPass (sr, 120.0, 0.7071);
     for (auto* b : { &xHigh1a, &xHigh1b }) b->setHighPass (sr, 120.0, 0.7071);
     for (auto* b : { &xLow2a, &xLow2b, &apLowA }) b->setLowPass (sr, 4000.0, 0.7071);
@@ -128,6 +137,7 @@ void WhaleDSP::reset()
     }
     specCounter = 0;
     fastEnv = slowEnv = 0.0f;
+    kFast = kSlow = 0.0f; punchGain = punchGainHi = 1.0f; punchLp.reset(); punchSplit.reset(); satPre.reset(); satPost.reset(); satSplit.reset(); satEnv = 0.0f;
     for (auto* b : { &xLow1a, &xLow1b, &xHigh1a, &xHigh1b, &xLow2a, &xLow2b, &xHigh2a, &xHigh2b, &apLowA, &apLowB, &apHighA, &apHighB,
                      &shelfLow, &shelfAir, &sideHpA, &sideHpB, &nyqA, &nyqB, &dcBlock, &kickLp })
         b->reset();
@@ -344,12 +354,29 @@ void WhaleDSP::stageA (float* L, float* R, int n, const Settings&) noexcept
             const float det = std::max (std::abs (l), std::abs (r));
             fastEnv = det > fastEnv ? fastAtt * fastEnv + (1 - fastAtt) * det : fastRel * fastEnv + (1 - fastRel) * det;
             slowEnv = det > slowEnv ? slowAtt * slowEnv + (1 - slowAtt) * det : slowRel * slowEnv + (1 - slowRel) * det;
+            // kick band
+            const float kd = std::abs (punchLp.process (0.5f * (l + r), 0));
+            kFast = kd > kFast ? kFastAtt * kFast + (1 - kFastAtt) * kd : kFastRel * kFast + (1 - kFastRel) * kd;
+            kSlow = kd > kSlow ? kSlowAtt * kSlow + (1 - kSlowAtt) * kd : kSlowRel * kSlow + (1 - kSlowRel) * kd;
+            // split for the shaping: low band (kick + bass, < 180 Hz) / rest, complementary (low + rest = input)
+            const float lowL = punchSplit.process (l, 0), lowR = punchSplit.process (r, 1);
             if (punch > 1.0e-4f)
             {
-                const float ratio = juce::jlimit (1.0f, 4.0f, (fastEnv + 1.0e-6f) / (slowEnv + 1.0e-6f));
-                const float g = std::pow (ratio, punch * 0.8f);
-                l *= g; r *= g;
+                // LOW band, driven by the kick: small lift on the hit, strong dip on the tail between hits (bass and
+                // kick tails). The dip is what survives the limiter: at the same loudness the kicks stand out and the
+                // low end gets tighter. REST, driven by the broadband transients (snare, clap): lift on the hits,
+                // light dip on the tails, so the hats and the air do not duck.
+                const float kr = (kFast + 1.0e-6f) / (kSlow + 1.0e-6f), br = (fastEnv + 1.0e-6f) / (slowEnv + 1.0e-6f);
+                float lowDb = kr > 1.0f ? std::min (2.0f, 3.0f * std::log2 (kr)) : std::max (-10.0f, 14.0f * std::log2 (std::max (kr, 0.05f)));
+                float restDb = br > 1.0f ? std::min (4.0f, 6.0f * std::log2 (br)) : std::max (-2.5f, 4.0f * std::log2 (std::max (br, 0.05f)));
+                if (kr < 1.0f) restDb = std::min (restDb, 0.0f);   // no lift on the rest while the kick tail is being lowered
+                const float tl = dbToGain (lowDb * punch), th = dbToGain (restDb * punch);
+                punchGain = punchSmooth * punchGain + (1 - punchSmooth) * tl;
+                punchGainHi = punchSmooth * punchGainHi + (1 - punchSmooth) * th;
+                l = lowL * punchGain + (l - lowL) * punchGainHi;
+                r = lowR * punchGain + (r - lowR) * punchGainHi;
             }
+            else punchGain = punchGainHi = 1.0f;
         }
         // ---- COMPRESSION: 3-band leveller (glue). Band peaks are held near their own average (+3 dB).
         {
@@ -427,37 +454,52 @@ void WhaleDSP::stageB (juce::dsp::AudioBlock<float>& block, const Settings&) noe
     auto up = os->processSamplesUp (block);
     const int m = (int) up.getNumSamples();
     float maxRatio = 1.0f;
-    for (int c = 0; c < 2; ++c)
+    float* xs[2] = { up.getChannelPointer (0), up.getChannelPointer (1) };
+    for (int i = 0; i < m; ++i)
     {
-        float* x = up.getChannelPointer ((size_t) c);
-        for (int i = 0; i < m; ++i)
+        const float t = (float) i / (float) m;
+        const float sat = sat0 + t * (sat1 - sat0);
+        const float clip = clip0 + t * (clip1 - clip0);
+        const float drive = dbToGain (drv0 + t * (drv1 - drv0));
+        const float ceil = dbToGain (ceil0 + t * (ceil1 - ceil0));
+        // SATURATION, relative to the mix's own loud level (so it works the same whatever the input level and never
+        // caps the master level): a linked 300 ms RMS envelope sets the reference, the peaks (about 3x the RMS) are
+        // driven up to +7.5 dB into an asymmetric tanh (even + odd harmonics, soft density), then brought back.
+        // Lows are pre-emphasised (+4.5 dB under ~250 Hz) so the bass thickens while the highs stay clean.
+        // Only the band under ~1.5 kHz is saturated (complementary split: body + rest = input), so the harmonics come
+        // from the bass and the low-mids (warmth, thickness) and the highs are not made harsh.
+        float y[2], rest[2];
+        for (int c = 0; c < 2; ++c)
         {
-            const float t = (float) i / (float) m;
-            const float sat = sat0 + t * (sat1 - sat0);
-            const float clip = clip0 + t * (clip1 - clip0);
-            const float drive = dbToGain (drv0 + t * (drv1 - drv0));
-            const float ceil = dbToGain (ceil0 + t * (ceil1 - ceil0));
-            float v = x[i];
-            if (sat > 1.0e-4f)
-            {
-                // Smooth tanh with a small bias (even harmonics = warmth), unity gain at low level.
-                const float k = 1.0f + 2.5f * sat, bias = 0.12f * sat;
-                const float tb = std::tanh (k * bias);
-                v = (std::tanh (k * (v + bias)) - tb) / (k * (1.0f - tb * tb));
-            }
-            v *= drive;
+            const float body = satSplit.process (xs[c][i], c);     // filters always run: no state jump
+            rest[c] = xs[c][i] - body;
+            y[c] = satPre.process (body, c);
+        }
+        const float pw = 0.5f * (y[0] * y[0] + y[1] * y[1]);
+        satEnv = satEnvCoef * satEnv + (1.0f - satEnvCoef) * pw;
+        if (sat > 1.0e-4f)
+        {
+            const float ref = 3.0f * std::sqrt (std::max (satEnv, 1.0e-10f));
+            const float a = dbToGain (7.5f * sat), bias = 0.18f * sat;
+            const float tb = std::tanh (bias), nrm = 1.0f / (1.0f - tb * tb);
+            for (int c = 0; c < 2; ++c)
+                y[c] = (std::tanh (a * y[c] / ref + bias) - tb) * nrm / a * ref;
+        }
+        for (int c = 0; c < 2; ++c)
+        {
+            float v = (satPost.process (y[c], c) + rest[c]) * drive;   // inverse of the pre-emphasis, rest added back
             if (clip > 1.0e-4f)
             {
                 const float knee = ceil * dbToGain (-3.5f * clip), top = ceil * dbToGain (0.5f);
                 const float av = std::abs (v);
                 if (av > knee)
                 {
-                    const float y = knee + (top - knee) * std::tanh ((av - knee) / (top - knee));
-                    maxRatio = std::max (maxRatio, av / y);
-                    v = v < 0 ? -y : y;
+                    const float yc = knee + (top - knee) * std::tanh ((av - knee) / (top - knee));
+                    maxRatio = std::max (maxRatio, av / yc);
+                    v = v < 0 ? -yc : yc;
                 }
             }
-            x[i] = v;
+            xs[c][i] = v;
         }
     }
     os->processSamplesDown (block);

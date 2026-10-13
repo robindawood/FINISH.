@@ -79,6 +79,12 @@ private:
 
     // COMPRESSION: transient shaper + 3-band leveller (LR4 at 120 Hz / 4 kHz, phase-coherent sum)
     float fastEnv = 0, slowEnv = 0, fastAtt = 0, fastRel = 0, slowAtt = 0, slowRel = 0;
+    // PUNCH v2: kick-band detector (< 150 Hz) + broadband detector; boosts the attack and lowers the sustain
+    Biquad punchLp, punchSplit;
+    float kFast = 0, kSlow = 0, kFastAtt = 0, kFastRel = 0, kSlowAtt = 0, kSlowRel = 0, punchGain = 1.0f, punchGainHi = 1.0f, punchSmooth = 0;
+    // SATURATION v2 (oversampled): pre-emphasis low shelf (lows saturate more than highs), inverse after
+    Biquad satPre, satPost, satSplit;
+    float satEnv = 0.0f, satEnvCoef = 0.0f;
     Biquad xLow1a, xLow1b, xHigh1a, xHigh1b, xLow2a, xLow2b, xHigh2a, xHigh2b, apLowA, apLowB, apHighA, apHighB;
     float bandEnv[3] {}, bandRms[3] {}, bandGr[3] {};
     float bandAtt = 0, bandRel = 0, bandRmsCoef = 0, bandGrSmooth = 0, lastDetail = -1.0f;
