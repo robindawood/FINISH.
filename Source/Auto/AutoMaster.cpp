@@ -641,9 +641,12 @@ AutoResult AutoMaster::compute (const AudioFeatures& f, int styleParam, double b
 }
 // ============================================================================================ second pass (processed output)
 
-void AutoMaster::refine (const AudioFeatures& out, float avgGr, AutoResult& r)
+void AutoMaster::refine (const AudioFeatures& outMeasured, float avgGr, AutoResult& r, const float* characterCurve)
 {
-    if (! r.valid || ! out.valid || ! out.hasSpectrum) return;
+    if (! r.valid || ! outMeasured.valid || ! outMeasured.hasSpectrum) return;
+    AudioFeatures out = outMeasured;
+    if (characterCurve != nullptr)      // the preset's colour is intentional: judge the rest against the references
+        for (int i = 0; i < nb; ++i) out.thirdOctDb[i] -= characterCurve[i];
     const auto& p = profile (r.style);
     const bool lofi = r.style == styleLofi;
     auto& b = r.base;
@@ -703,12 +706,48 @@ void AutoMaster::refine (const AudioFeatures& out, float avgGr, AutoResult& r)
                       + fr (" dB au-dessus du volume (références : ") + juce::String (p.plr_drop.median, 1) + fr (" dB, mais elles dépassent souvent 0 dBTP)"));
 }
 
-void AutoMaster::finalCheck (const AudioFeatures& out, AutoResult& r)
+void AutoMaster::finalCheck (const AudioFeatures& outMeasured, AutoResult& r, const float* characterCurve)
 {
-    if (! r.valid || ! out.valid || ! out.hasSpectrum) return;
+    if (! r.valid || ! outMeasured.valid || ! outMeasured.hasSpectrum) return;
+    AudioFeatures out = outMeasured;
+    if (characterCurve != nullptr)
+        for (int i = 0; i < nb; ++i) out.thirdOctDb[i] -= characterCurve[i];
     const auto& p = profile (r.style);
     const auto t = analyseTone (out, p, 1.0f);
     r.toneErrorAfter = t.error;
     r.report.add (fr ("Résultat : écart tonal aux références ") + juce::String (r.toneErrorBefore, 1) + fr (" dB avant → ") + juce::String (t.error, 1)
                   + fr (" dB après ; passages forts à ") + juce::String (out.loudLufs, 1) + " LUFS, true peak " + juce::String (out.truePeakDb, 1) + " dBTP");
+}
+
+// ============================================================================================ preset layering
+
+void AutoMaster::eqResponse (const ModuleBase& b, float out[29])
+{
+    for (int i = 0; i < nb; ++i)
+    {
+        float v = toolResponseDb (0, profileThirdOctHz[i], b.toneLow) + toolResponseDb (5, profileThirdOctHz[i], b.toneAir);
+        for (int k = 0; k < 4; ++k) v += toolResponseDb (k + 1, profileThirdOctHz[i], b.specGain[k], b.specFreq[k]);
+        out[i] = v;
+    }
+}
+
+void AutoMaster::fitEq (const float wanted[29], bool lofi, bool lowCutActive, ModuleBase& b)
+{
+    ToneAnalysis t;
+    for (int i = 0; i < nb; ++i)
+    {
+        t.wanted[i] = wanted[i];
+        t.deviation[i] = -wanted[i];
+        t.tolerance[i] = 1.0f;
+        t.weight[i] = i == 0 ? 0.3f : i == 1 ? 0.5f : i <= 3 ? 0.75f : i == 27 ? 0.6f : i == 28 ? 0.25f : 1.0f;
+    }
+    BellHz bells = defaultBells();
+    const auto g = placeAndFit (t, lofi, lowCutActive, bells);
+    for (int k = 0; k < 6; ++k)
+    {
+        const auto lim = toolLimits (k, lofi);
+        const float v = juce::jlimit (lim.lo, lim.hi, g[(size_t) k]);
+        setTool (b, k, std::abs (v) < 0.3f ? 0.0f : v);
+    }
+    for (int k = 0; k < 4; ++k) b.specFreq[k] = b.specGain[k] == 0.0f ? specBands[k].hz : bells[(size_t) k];
 }

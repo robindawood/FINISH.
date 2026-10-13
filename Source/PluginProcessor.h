@@ -62,8 +62,15 @@ public:
     float getOutputIntegrated() const { return outIntegrated; }
     bool isTargetLoudnessMode() const;
 
+    // Factory presets are a CHARACTER layered on AUTO's CORRECTION: choosing one keeps what AUTO fixed (tonal balance,
+    // low-cut, mono bass, dynamics need) and adds the preset's colour; running AUTO keeps the chosen character.
+    // User presets are full snapshots and replace both layers.
     void applyPreset (int index);
     void resetToNeutral();
+    bool hasAutoCorrection() const { return haveCorrection; }
+    int getCharacterPreset() const { return characterIndex; }
+    static ModuleBase combineLayers (const ModuleBase* correction, const float* correctionCurve, const WhalePreset* character, int style);
+    static void characterCurve (const WhalePreset& p, float out[29]);
 
     friend struct TestAccess;
 private:
@@ -113,6 +120,15 @@ private:
     // What the processed output of the LISTENED passages looks like: listened spectrum + (output - input) measured
     // simultaneously on the same loud passages during verification (robust to the song moving to a breakdown).
     AudioFeatures estimateProcessed() const;
+
+    ModuleBase correction;                    // AUTO's decision (the corrective layer)
+    float correctionCurve[29] {};             // response of its EQ tools
+    bool haveCorrection = false;
+    ModuleBase prevCorrection; float prevCurve[29] {}; bool prevHave = false;   // restored if AUTO is cancelled
+    int characterIndex = -1;                  // factory preset used as character (-1 = none)
+    float charCurve[29] {};
+    void rebuildLayers();                     // writes correction (+) character to the parameters
+    const float* activeCharacterCurve() const { return characterIndex >= 0 ? charCurve : nullptr; }
 
     AudioFeatures listenedFeatures;
     float autoInputLoud = -70.0f;                        // loud-passage loudness of what AUTO listened to

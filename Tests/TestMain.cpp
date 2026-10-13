@@ -162,7 +162,7 @@ namespace
         MixGen gen; gen.gainDb = -20.0f;
         run (p, gen, 40.0);
         const float out = p.getDSP().getOutputLoudness();
-        std::cout << "    output short-term " << out << " LUFS (target " << p.getEffectiveTarget() << ")\n";
+        std::cout << "    output short-term " << out << " LUFS (target " << p.getEffectiveTarget() << "), corr " << p.getDSP().getLoudnessCorrectionDb() << " GR " << p.getDSP().getGainReductionDb() << "\n";
         CHECK (std::abs (out - p.getEffectiveTarget()) < 1.0f, "closed loop holds the target within 1 dB");
         setParam (p, PID::bypass, 1.0f);
         run (p, gen, 6.0);
@@ -334,6 +334,45 @@ namespace
         CHECK (v != WhaleAudioProcessor::Verdict::clipping && v != WhaleAudioProcessor::Verdict::tooLoud && v != WhaleAudioProcessor::Verdict::phase,
                "no problem state after AUTO");
         CHECK (p.getSouffleCount() == (v == WhaleAudioProcessor::Verdict::validated ? 1 : 0), "le souffle only when validated, once");
+    }
+
+    void testPresetLayering()
+    {
+        std::cout << "Presets layered on AUTO\n";
+        WhaleAudioProcessor p;
+        p.prepareToPlay (sr, block);
+        MixGen gen; gen.gainDb = -18.0f; gen.stereoBass = true;
+        setParam (p, PID::style, (float) styleTechHouse);
+        run (p, gen, 3.0);
+        p.toggleAuto();
+        run (p, gen, 70.0);
+        CHECK (p.getAutoState() == WhaleAudioProcessor::AutoState::done, "AUTO finished");
+        auto val = [&] (const char* id) { return p.state.getRawParameterValue (id)->load(); };
+        const float autoLow = val (PID::toneLow), autoCut = val (PID::lowCut), autoMono = val (PID::widthMono), autoSub = val (PID::specGain[0]);
+        // a factory preset now adds its colour and keeps the correction
+        int idx = -1;
+        for (int i = 0; i < p.presets.getAll().size(); ++i) if (p.presets.getAll()[i].name == "Rolling Bass") idx = i;
+        p.applyPreset (idx);
+        const auto& pr = p.presets.getAll()[idx];
+        std::cout << "    AUTO: shelf " << autoLow << ", sub bell " << autoSub << ", low-cut " << autoCut << " | + Rolling Bass: shelf " << val (PID::toneLow)
+                  << ", sub bell " << val (PID::specGain[0]) << " @ " << val (PID::specFreq[0]) << " Hz, punch " << val (PID::compPunch) << "\n";
+        CHECK (p.getAutoState() == WhaleAudioProcessor::AutoState::done && p.hasAutoCorrection(), "AUTO's correction is kept");
+        CHECK (std::abs (val (PID::lowCut) - autoCut) < 0.5f && val (PID::widthMono) >= autoMono - 0.5f, "low-cut and mono bass kept");
+        CHECK (std::abs (val (PID::compPunch) - pr.base.compPunch) < 0.01f, "the preset's punch is applied");
+        // switching to another factory preset changes the colour, not the correction
+        int idx2 = -1;
+        for (int i = 0; i < p.presets.getAll().size(); ++i) if (p.presets.getAll()[i].name == "Deep & Warm") idx2 = i;
+        p.applyPreset (idx2);
+        CHECK (std::abs (val (PID::lowCut) - autoCut) < 0.5f && p.hasAutoCorrection(), "second preset: correction still there");
+        CHECK (std::abs (val (PID::satDrive) - p.presets.getAll()[idx2].base.satDrive) < 0.01f, "second preset: its saturation");
+        // project reload keeps both layers
+        juce::MemoryBlock mb; p.getStateInformation (mb);
+        WhaleAudioProcessor q; q.setStateInformation (mb.getData(), (int) mb.getSize());
+        CHECK (q.hasAutoCorrection() && q.getCharacterPreset() == idx2, "layers restored with the project");
+        // AUTO again with a character chosen: the character stays
+        p.toggleAuto();
+        run (p, gen, 70.0);
+        CHECK (p.getCharacterPreset() == idx2 && std::abs (val (PID::satDrive) - p.presets.getAll()[idx2].base.satDrive) < 0.01f, "AUTO keeps the chosen character");
     }
 
     void testPresetsAndState()
@@ -521,6 +560,7 @@ int main (int argc, char** argv)
     testAutoProfiles();
     testLowCut();
     testAutoEndToEnd();
+    testPresetLayering();
     testPresetsAndState();
     std::cout << (failures == 0 ? "\nALL TESTS PASSED\n" : "\nFAILURES: " + std::to_string (failures) + "\n");
     return failures == 0 ? 0 : 1;

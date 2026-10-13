@@ -37,9 +37,15 @@ public:
     // First pass, from the unprocessed mix.
     static AutoResult compute (const AudioFeatures& f, int styleParam, double bpm, int targetIndex, float ceilingDb);
     // Second pass, from the processed output: adjusts r.base (and r.loudPassageTarget), appends to the report.
-    static void refine (const AudioFeatures& out, float avgLimiterGrDb, AutoResult& r);
+    // characterCurve (29 bands, dB, may be null): the tonal colour a preset adds on purpose; it is not "corrected".
+    static void refine (const AudioFeatures& out, float avgLimiterGrDb, AutoResult& r, const float* characterCurve = nullptr);
     // Final measurement of the processed output (report only).
-    static void finalCheck (const AudioFeatures& out, AutoResult& r);
+    static void finalCheck (const AudioFeatures& out, AutoResult& r, const float* characterCurve = nullptr);
+
+    // EQ helpers for presets layered on AUTO: response of the EQ tools of a base (shelves + bells, not the low-cut),
+    // and the fit of a wanted response curve onto the tools (bells placed where needed, limits respected).
+    static void eqResponse (const ModuleBase& b, float out[29]);
+    static void fitEq (const float wanted[29], bool lofi, bool lowCutActive, ModuleBase& b);
 
     // Tone analysis shared by both passes (exposed for tests).
     struct ToneAnalysis

@@ -171,6 +171,8 @@ void WhaleAudioProcessor::toggleAuto()
     {
         inCap.stop(); outCap.stop();
         writeBase (beforeAuto);   // cancel: back to the settings before AUTO
+        correction = prevCorrection; haveCorrection = prevHave;
+        std::copy (prevCurve, prevCurve + 29, correctionCurve);
         autoState = AutoState::idle;
         return;
     }
@@ -195,19 +197,83 @@ float WhaleAudioProcessor::getAutoProgress() const
     return 0.0f;
 }
 
+void WhaleAudioProcessor::characterCurve (const WhalePreset& p, float out[29])
+{
+    // the preset's tonal colour, as written in it (bells at their usual places, shelves)
+    ModuleBase eq;
+    for (int k = 0; k < 4; ++k) { eq.specGain[k] = p.base.specGain[k]; eq.specFreq[k] = specBands[k].hz; }
+    eq.toneLow = p.base.toneLow; eq.toneAir = p.base.toneAir;
+    AutoMaster::eqResponse (eq, out);
+}
+
+ModuleBase WhaleAudioProcessor::combineLayers (const ModuleBase* corr, const float* corrCurve, const WhalePreset* ch, int style)
+{
+    ModuleBase b = corr != nullptr ? *corr : ModuleBase();
+    if (ch == nullptr) return b;
+    const auto& c = ch->base;
+    if (corr == nullptr)
+    {
+        b = c;                      // no AUTO yet: the preset as written
+        b.lowCut = 0.0f;
+        return b;
+    }
+    // EQ: AUTO's correction curve + the preset's colour, fitted again on the tools
+    float wanted[29], cc[29];
+    characterCurve (*ch, cc);
+    for (int i = 0; i < 29; ++i) wanted[i] = (corrCurve != nullptr ? corrCurve[i] : 0.0f) + cc[i];
+    AutoMaster::fitEq (wanted, style == styleLofi, b.lowCut > 0.0f, b);
+    for (int k = 0; k < 4; ++k) b.specDyn[k] = std::max (b.specDyn[k], c.specDyn[k]);
+    // Dynamics: AUTO sized glue and clipper for what this mix needs; the preset moves them from there.
+    // Its punch, saturation and detail are its own colour (AUTO keeps those neutral).
+    b.compGlue = juce::jlimit (0.0f, 0.6f, b.compGlue + (c.compGlue - 0.3f));
+    b.clipAmt  = juce::jlimit (0.0f, 0.85f, b.clipAmt + (c.clipAmt - 0.35f));
+    b.compPunch = c.compPunch;
+    b.satDrive = c.satDrive;
+    b.compDetail = c.compDetail;
+    // Width: the preset adds to AUTO's correction; mono bass is a safety, the larger one wins (0 = keep AUTO's)
+    b.widthSide = juce::jlimit (-6.0f, 4.0f, b.widthSide + c.widthSide);
+    if (c.widthMono > 0.0f && b.widthMono > 0.0f) b.widthMono = std::max (b.widthMono, c.widthMono);
+    return b;
+}
+
+void WhaleAudioProcessor::rebuildLayers()
+{
+    const auto& all = presets.getAll();
+    const WhalePreset* ch = juce::isPositiveAndBelow (characterIndex, all.size()) ? &all.getReference (characterIndex) : nullptr;
+    auto b = combineLayers (haveCorrection ? &correction : nullptr, haveCorrection ? correctionCurve : nullptr, ch, getActiveStyle());
+    if (! haveCorrection) b.lowCut = pLowCut->load();   // a low-cut set by hand stays (it corrects the mix, not the colour)
+    writeBase (b);
+}
+
 void WhaleAudioProcessor::applyPreset (int index)
 {
     const auto& all = presets.getAll();
     if (! juce::isPositiveAndBelow (index, all.size())) return;
-    presets.apply (all[index], state);
+    const auto& p = all.getReference (index);
+    presets.apply (p, state);            // style, loudness target, ceiling, macros back to neutral (and the base)
     presets.setCurrent (index);
-    autoState = AutoState::idle;
-    haveAutoTarget = false;
-    autoInputLoudRef.store (-100.0f);
+    if (p.factory)
+    {
+        characterIndex = index;
+        characterCurve (p, charCurve);
+        rebuildLayers();                 // keeps AUTO's correction, adds the colour
+        if (p.target != styleTarget) { haveAutoTarget = false; autoInputLoudRef.store (-100.0f); }
+    }
+    else
+    {
+        // user preset: a full snapshot of a finished master
+        characterIndex = -1;
+        haveCorrection = false;
+        autoState = AutoState::idle;
+        haveAutoTarget = false;
+        autoInputLoudRef.store (-100.0f);
+    }
 }
 
 void WhaleAudioProcessor::resetToNeutral()
 {
+    haveCorrection = false;
+    characterIndex = -1;
     writeBase (ModuleBase());
     autoState = AutoState::idle;
     haveAutoTarget = false;
@@ -340,8 +406,31 @@ void WhaleAudioProcessor::timerCallback()
         else if (verifyPhase == 1 && outCap.capturedSeconds() >= refineSeconds)
         {
             const float gr = grCount > 0 ? (float) (grAcc / grCount) : 0.0f;
-            AutoMaster::refine (estimateProcessed(), gr, autoResult);
-            writeBase (autoResult.base);
+            {
+                // refine works on the corrective layer: the measured output contains the character, which it ignores
+                const auto applied = readBase();
+                for (int k = 0; k < 4; ++k) { autoResult.base.specGain[k] = applied.specGain[k]; autoResult.base.specFreq[k] = applied.specFreq[k]; }
+                autoResult.base.toneLow = applied.toneLow; autoResult.base.toneAir = applied.toneAir;
+                float before[29];
+                AutoMaster::eqResponse (applied, before);
+                AutoMaster::refine (estimateProcessed(), gr, autoResult, activeCharacterCurve());
+                float after[29];
+                AutoMaster::eqResponse (autoResult.base, after);
+                // new correction = old correction + what refine added on top of what was applied
+                for (int i = 0; i < 29; ++i) correctionCurve[i] += after[i] - before[i];
+                const auto eqKeep = correction;
+                correction = autoResult.base;
+                if (characterIndex >= 0)
+                {
+                    // the EQ part of correction is defined by its curve; keep the dynamics refine decided
+                    for (int k = 0; k < 4; ++k) { correction.specGain[k] = eqKeep.specGain[k]; correction.specFreq[k] = eqKeep.specFreq[k]; }
+                    correction.toneLow = eqKeep.toneLow; correction.toneAir = eqKeep.toneAir;
+                    AutoMaster::fitEq (correctionCurve, getActiveStyle() == styleLofi, correction.lowCut > 0.0f, correction);
+                }
+                else
+                    AutoMaster::eqResponse (correction, correctionCurve);
+                rebuildLayers();
+            }
             autoLoudTarget = autoResult.loudPassageTarget;
             verifyPhase = 2;
             verifySeconds = settleSeconds + refineSeconds;
@@ -349,7 +438,7 @@ void WhaleAudioProcessor::timerCallback()
         }
         else if (verifyPhase == 2 && outCap.capturedSeconds() >= finalSeconds)
         {
-            AutoMaster::finalCheck (estimateProcessed(), autoResult);
+            AutoMaster::finalCheck (estimateProcessed(), autoResult, activeCharacterCurve());
             inCap.stop(); outCap.stop();
             autoState = AutoState::done;
             souffleArmed = true;
@@ -450,7 +539,12 @@ void WhaleAudioProcessor::finishListening()
     autoResult = AutoMaster::compute (features, (int) pStyle->load(), bpm, (int) pTarget->load(), pCeil->load());
     if (! autoResult.valid) { autoState = AutoState::idle; return; }
     beforeAuto = readBase();
-    writeBase (autoResult.base);
+    prevCorrection = correction; prevHave = haveCorrection;
+    std::copy (correctionCurve, correctionCurve + 29, prevCurve);
+    correction = autoResult.base;
+    AutoMaster::eqResponse (correction, correctionCurve);
+    haveCorrection = true;
+    rebuildLayers();                    // the chosen character (if any) stays on top
     autoLoudTarget = autoResult.loudPassageTarget;
     haveAutoTarget = true;
     for (auto* id : { PID::mGlue, PID::mPunch, PID::mWarmth, PID::mAir, PID::mWidth, PID::mBass, PID::mDetail, PID::mLoud })
@@ -475,6 +569,27 @@ void WhaleAudioProcessor::getStateInformation (juce::MemoryBlock& dest)
     st.setProperty ("autoReport", autoResult.report.joinIntoString ("\n"), nullptr);
     st.setProperty ("autoNotes", autoResult.mixNotes.joinIntoString ("\n"), nullptr);
     st.setProperty ("preset", presets.getCurrentName(), nullptr);
+    // the two layers, so a later preset change still keeps AUTO's correction
+    st.removeChild (st.getChildWithName ("Layers"), nullptr);
+    {
+        juce::ValueTree layers ("Layers");
+        layers.setProperty ("haveCorrection", haveCorrection, nullptr);
+        layers.setProperty ("character", characterIndex >= 0 ? presets.getAll()[characterIndex].name : juce::String(), nullptr);
+        juce::String curve;
+        for (int i = 0; i < 29; ++i) curve << juce::String (correctionCurve[i], 3) << (i < 28 ? " " : "");
+        layers.setProperty ("curve", curve, nullptr);
+        auto& c = correction;
+        for (int k = 0; k < 4; ++k)
+        {
+            layers.setProperty (PID::specGain[k], c.specGain[k], nullptr); layers.setProperty (PID::specDyn[k], c.specDyn[k], nullptr);
+            layers.setProperty (PID::specFreq[k], c.specFreq[k], nullptr);
+        }
+        for (auto [id, v] : { std::pair<const char*, float> { PID::compGlue, c.compGlue }, { PID::compPunch, c.compPunch }, { PID::compDetail, c.compDetail },
+                              { PID::satDrive, c.satDrive }, { PID::widthSide, c.widthSide }, { PID::widthMono, c.widthMono }, { PID::toneLow, c.toneLow },
+                              { PID::toneAir, c.toneAir }, { PID::clipAmt, c.clipAmt }, { PID::lowCut, c.lowCut } })
+            layers.setProperty (id, v, nullptr);
+        st.appendChild (layers, nullptr);
+    }
     if (auto xml = st.createXml())
         copyXmlToBinary (*xml, dest);
 }
@@ -503,6 +618,23 @@ void WhaleAudioProcessor::setStateInformation (const void* data, int size)
     presets.setCurrent (-1);
     for (int i = 0; i < presets.getAll().size(); ++i)
         if (presets.getAll()[i].name == name) presets.setCurrent (i);
+    haveCorrection = false; characterIndex = -1;
+    const auto layers = st.getChildWithName ("Layers");
+    if (layers.isValid())
+    {
+        haveCorrection = (bool) layers.getProperty ("haveCorrection", false);
+        const auto toks = juce::StringArray::fromTokens (layers.getProperty ("curve").toString(), " ", "");
+        for (int i = 0; i < 29; ++i) correctionCurve[i] = i < toks.size() ? toks[i].getFloatValue() : 0.0f;
+        auto get = [&] (const char* id, float def) { return (float) layers.getProperty (id, def); };
+        auto& c = correction;
+        for (int k = 0; k < 4; ++k) { c.specGain[k] = get (PID::specGain[k], 0); c.specDyn[k] = get (PID::specDyn[k], 0); c.specFreq[k] = get (PID::specFreq[k], specBands[k].hz); }
+        c.compGlue = get (PID::compGlue, 0); c.compPunch = get (PID::compPunch, 0); c.compDetail = get (PID::compDetail, 0.5f);
+        c.satDrive = get (PID::satDrive, 0); c.widthSide = get (PID::widthSide, 0); c.widthMono = get (PID::widthMono, 0);
+        c.toneLow = get (PID::toneLow, 0); c.toneAir = get (PID::toneAir, 0); c.clipAmt = get (PID::clipAmt, 0); c.lowCut = get (PID::lowCut, 0);
+        const auto ch = layers.getProperty ("character").toString();
+        for (int i = 0; i < presets.getAll().size(); ++i)
+            if (ch.isNotEmpty() && presets.getAll()[i].name == ch) { characterIndex = i; characterCurve (presets.getAll()[i], charCurve); }
+    }
 }
 
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter() { return new WhaleAudioProcessor(); }
