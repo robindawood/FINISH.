@@ -199,6 +199,7 @@ float WhaleAudioProcessor::getAutoProgress() const
 
 void WhaleAudioProcessor::characterCurve (const WhalePreset& p, float out[29])
 {
+    if (p.hasColour) { std::copy (p.colour, p.colour + 29, out); return; }
     // the preset's tonal colour, as written in it (bells at their usual places, shelves)
     ModuleBase eq;
     for (int k = 0; k < 4; ++k) { eq.specGain[k] = p.base.specGain[k]; eq.specFreq[k] = specBands[k].hz; }
@@ -225,8 +226,9 @@ ModuleBase WhaleAudioProcessor::combineLayers (const ModuleBase* corr, const flo
     for (int k = 0; k < 4; ++k) b.specDyn[k] = std::max (b.specDyn[k], c.specDyn[k]);
     // Dynamics: AUTO sized glue and clipper for what this mix needs; the preset moves them from there.
     // Its punch, saturation and detail are its own colour (AUTO keeps those neutral).
-    b.compGlue = juce::jlimit (0.0f, 0.6f, b.compGlue + (c.compGlue - 0.3f));
-    b.clipAmt  = juce::jlimit (0.0f, 0.85f, b.clipAmt + (c.clipAmt - 0.35f));
+    // Less than AUTO's clipper would hand the peaks to the limiter (pumping, flatter kick): it can only go down a little.
+    b.compGlue = juce::jlimit (std::max (0.0f, b.compGlue - 0.15f), 0.6f, b.compGlue + (c.compGlue - 0.3f));
+    b.clipAmt  = juce::jlimit (std::max (0.0f, b.clipAmt - 0.1f), 0.85f, b.clipAmt + (c.clipAmt - 0.35f));
     b.compPunch = c.compPunch;
     b.satDrive = c.satDrive;
     b.compDetail = c.compDetail;
@@ -356,7 +358,11 @@ void WhaleAudioProcessor::timerCallback()
         const int t = (int) pTarget->load();
         float target = -9.0f;
         if (t == styleTarget || t == manualTarget || t == sameLevelTarget)
+        {
             target = haveAutoTarget ? autoLoudTarget : AutoMaster::profile (getActiveStyle()).st_drop.median;
+            if (t == styleTarget && juce::isPositiveAndBelow (characterIndex, presets.getAll().size()))
+                target += presets.getAll().getReference (characterIndex).loudOffset;   // the preset's loudness character
+        }
         else if (t > 0 && t < sameLevelTarget)
             target = loudnessTargets[t].lufs + 1.0f;
         effectiveTarget.store (target);

@@ -12,6 +12,10 @@ struct WhalePreset
     int target = styleTarget;
     float ceiling = -1.0f;
     ModuleBase base;
+    float colour[29] {};            // factory presets: the tonal colour they add (dB per 1/3 octave)
+    bool hasColour = false;
+    juce::String tags;
+    float loudOffset = 0.0f;        // dB added to the style's loudness target (dynamic presets lower, dense ones higher)              // one line: what it does (+ basses · punch fort · dense ...)
     float lowCut = -1.0f;           // < 0: the preset leaves the low-cut alone (it corrects the mix, not the character)
     bool factory = true;
     juce::File file;                // user presets

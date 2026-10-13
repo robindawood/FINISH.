@@ -14,6 +14,7 @@ namespace
         return c;
     }
     constexpr float rowH = 62.0f;
+    constexpr int catFav = numStyles, catMine = numStyles + 1;   // after TOUS + the styles
 }
 
 PresetBrowser::PresetBrowser (WhaleAudioProcessor& p) : proc (p)
@@ -34,7 +35,7 @@ void PresetBrowser::refresh()
     proc.presets.refreshUserPresets();
     const int cur = proc.presets.getCurrent();
     if (juce::isPositiveAndBelow (cur, proc.presets.getAll().size()))
-        category = proc.presets.getAll()[cur].factory ? proc.presets.getAll()[cur].style : 8;
+        category = proc.presets.getAll()[cur].factory ? proc.presets.getAll()[cur].style : catMine;
     rebuild();
     repaint();
 }
@@ -49,7 +50,7 @@ juce::Rectangle<float> PresetBrowser::panel() const
 juce::Rectangle<float> PresetBrowser::catBounds (int i) const
 {
     const auto p = panel();
-    return { p.getX() + 18, p.getY() + 72 + (float) i * 38.0f + (i >= 7 ? 12.0f : 0.0f), 200, 32 };
+    return { p.getX() + 18, p.getY() + 72 + (float) i * 38.0f + (i >= catFav ? 12.0f : 0.0f), 200, 32 };
 }
 
 juce::Rectangle<float> PresetBrowser::rowBounds (int vi) const
@@ -79,9 +80,9 @@ void PresetBrowser::rebuild()
     {
         const auto& pr = all[i];
         bool ok = true;
-        if (category >= 1 && category <= 6) ok = pr.factory && pr.style == category;
-        else if (category == 7) ok = proc.presets.isFavourite (pr.name);
-        else if (category == 8) ok = ! pr.factory;
+        if (category >= 1 && category < numStyles) ok = pr.factory && pr.style == category;
+        else if (category == catFav) ok = proc.presets.isFavourite (pr.name);
+        else if (category == catMine) ok = ! pr.factory;
         if (ok && q.isNotEmpty()) ok = pr.name.containsIgnoreCase (q) || pr.description.containsIgnoreCase (q);
         if (ok) visible.add (i);
     }
@@ -110,7 +111,7 @@ void PresetBrowser::paint (juce::Graphics& g)
     {
         const auto r = catBounds (i);
         if (i == category) { g.setColour (juce::Colour (0xff36186a)); g.fillRoundedRectangle (r, 8.0f); }
-        if (i == 7)
+        if (i == catFav)
         {
             g.setColour (line);
             g.drawHorizontalLine ((int) r.getY() - 7, r.getX() + 6, r.getRight() - 6);
@@ -119,7 +120,7 @@ void PresetBrowser::paint (juce::Graphics& g)
         }
         g.setColour (i == category ? juce::Colours::white : juce::Colour (0xffaa9fd2));
         g.setFont (bold (13.5f, 0.03f));
-        g.drawText (cats[i], r.withTrimmedLeft (i == 7 ? 32.0f : 14.0f), juce::Justification::centredLeft);
+        g.drawText (cats[i], r.withTrimmedLeft (i == catFav ? 32.0f : 14.0f), juce::Justification::centredLeft);
     }
     g.setColour (line);
     g.drawVerticalLine ((int) p.getX() + 230, p.getY() + 70, p.getBottom() - 60);
@@ -143,6 +144,14 @@ void PresetBrowser::paint (juce::Graphics& g)
         g.setColour (text);
         g.setFont (bold (16.0f));
         g.drawText (pr.name, r.withTrimmedLeft (18).withHeight (r.getHeight() * 0.55f).translated (0, 4), juce::Justification::centredLeft);
+        if (pr.tags.isNotEmpty())
+        {
+            g.setColour (cyan.withAlpha (0.85f));
+            g.setFont (mono (11.0f));
+            const float nameW = bold (16.0f).getStringWidthFloat (pr.name);
+            g.drawText (pr.tags, r.withTrimmedLeft (18 + nameW + 14).withTrimmedRight (200).withHeight (r.getHeight() * 0.55f).translated (0, 5),
+                        juce::Justification::centredLeft);
+        }
         g.setColour (dim);
         g.setFont (body (13.0f));
         g.drawText (pr.description + (pr.factory ? juce::String() : fr ("  ·  à toi")), r.withTrimmedLeft (18).withTrimmedTop (r.getHeight() * 0.52f).withTrimmedRight (200),
@@ -153,7 +162,7 @@ void PresetBrowser::paint (juce::Graphics& g)
         g.drawRoundedRectangle (chip, 6.0f, 1.0f);
         g.setColour (text);
         g.setFont (mono (11.0f));
-        const juce::String tg = pr.target == styleTarget ? juce::String::formatted ("%.1f LUFS", (double) AutoMaster::profile (pr.style).lufs_i.median)
+        const juce::String tg = pr.target == styleTarget ? juce::String::formatted ("%.1f LUFS", (double) (AutoMaster::profile (pr.style).lufs_i.median + pr.loudOffset))
                                                          : juce::String (loudnessTargets[pr.target].shortName);
         g.drawText (tg, chip, juce::Justification::centred);
         juce::Path star; star.addStar ({ r.getRight() - 30, r.getCentreY() }, 5, 4.0f, 9.0f);
@@ -164,7 +173,7 @@ void PresetBrowser::paint (juce::Graphics& g)
     {
         g.setColour (dim);
         g.setFont (body (14.0f));
-        g.drawText (category == 8 ? fr ("Pas encore de preset à toi : règle WHALE puis « Sauver mon preset ».") : fr ("Aucun preset ici."),
+        g.drawText (category == catMine ? fr ("Pas encore de preset à toi : règle WHALE puis « Sauver mon preset ».") : fr ("Aucun preset ici."),
                     juce::Rectangle<float> (p.getX() + 250, p.getY() + 90, p.getWidth() - 280, 30), juce::Justification::centredLeft);
     }
     g.restoreState();

@@ -386,6 +386,29 @@ namespace
         bool all = true;
         for (int s = 1; s < numStyles; ++s) all &= perStyle[s] >= 3;
         CHECK (all, "at least 3 presets per style");
+        {
+            // within a style, two factory presets never sound alike: colour (RMS over 50 Hz - 12 kHz) or dynamics differ
+            int closePairs = 0;
+            const auto& ps = p.presets.getAll();
+            for (int i = 0; i < ps.size(); ++i)
+                for (int j = i + 1; j < ps.size(); ++j)
+                {
+                    if (! ps[i].factory || ! ps[j].factory || ps[i].style != ps[j].style) continue;
+                    double se = 0;
+                    for (int b = 3; b < 28; ++b) se += (ps[i].colour[b] - ps[j].colour[b]) * (ps[i].colour[b] - ps[j].colour[b]);
+                    const double tone = std::sqrt (se / 25.0);
+                    const auto& a = ps[i].base; const auto& c = ps[j].base;
+                    const float dyn = std::max ({ std::abs (a.compPunch - c.compPunch), std::abs (a.satDrive - c.satDrive),
+                                                  std::abs ((a.compGlue + a.clipAmt) - (c.compGlue + c.clipAmt)) * 0.5f });
+                    if (tone < 1.0 && dyn < 0.25f && ps[i].target == ps[j].target)
+                    {
+                        ++closePairs;
+                        std::cout << "    too close: " << ps[i].name << " / " << ps[j].name << " (colour " << tone << " dB, dynamics " << dyn << ")\n";
+                    }
+                }
+            CHECK (closePairs == 0, "presets of a style are clearly different from each other");
+            CHECK (ps[0].tags.isNotEmpty(), "presets describe what they do");
+        }
         p.applyPreset (0);
         const float glue = p.state.getRawParameterValue (PID::compGlue)->load();
         CHECK (std::abs (glue - p.presets.getAll()[0].base.compGlue) < 0.01f, "preset applied to the modules");
