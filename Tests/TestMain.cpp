@@ -271,6 +271,8 @@ namespace
             CHECK (AutoMaster::detectStyle (lofiF, 85.0) == styleLofi, "dark, dynamic, 85 BPM -> Lo-fi");
             auto at = featuresFromProfile (AutoMaster::profile (styleAfroTech));
             CHECK (AutoMaster::detectStyle (at, 128.0) == styleAfroTech, "Afro Tech curve at 128 BPM -> Afro Tech / Riddim");
+            auto dh = featuresFromProfile (AutoMaster::profile (styleDancehall));
+            CHECK (AutoMaster::detectStyle (dh, 113.0) == styleDancehall, "Dancehall curve at 113 BPM -> Afro / Dancehall");
             auto af = featuresFromProfile (AutoMaster::profile (styleAfro));
             CHECK (AutoMaster::detectStyle (af, 122.0) == styleAfro, "Afro House curve at 122 BPM -> Afro / Latin House");
         }

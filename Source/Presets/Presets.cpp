@@ -78,6 +78,13 @@ namespace
           0.5f, -1.0f, 0.3f, 0.3f, 0.4f, 0.3f, 0.4f, 0.3f,  0.45f, 0.35f, 0.45f, 0.20f, 0.0f, 150, -0.5f, 1.0f, 0.55f },
         { "Afro Tech Percu", "Percussions vives et aérées, groove ouvert", styleAfroTech, styleTarget, -1.0f,
           0, -0.8f, 0.5f, 0.5f, 0.3f, 0.3f, 0.5f, 0.4f,  0.35f, 0.40f, 0.55f, 0.15f, 0.5f, 140, 0, 1.2f, 0.45f },
+        // ---- Afro / Dancehall (club edits of dancehall, afrobeats, baile)
+        { "Dancehall Edit", "Sub qui tient, voix devant, kick sec", styleDancehall, styleTarget, -1.0f,
+          0.5f, -0.8f, 0.5f, 0, 0.4f, 0.3f, 0.4f, 0.3f,  0.40f, 0.35f, 0.45f, 0.20f, 0.0f, 150, 0, 0.8f, 0.50f },
+        { "Bashment Club", "Le plus fort pour le club, basses denses", styleDancehall, 3, -0.5f,
+          0.5f, -1.0f, 0.3f, 0, 0.5f, 0.3f, 0.5f, 0.3f,  0.50f, 0.30f, 0.40f, 0.25f, 0.0f, 160, 0.5f, 0.5f, 0.65f },
+        { "Afrobeats Smooth", "Chaleureux, voix soyeuses, dynamique respirée", styleDancehall, styleTarget, -1.0f,
+          0, 0.3f, -0.3f, 0, 0.3f, 0.2f, 0.5f, 0.3f,  0.30f, 0.20f, 0.60f, 0.20f, 0.5f, 140, 0.5f, 0.5f, 0.30f },
     };
 }
 

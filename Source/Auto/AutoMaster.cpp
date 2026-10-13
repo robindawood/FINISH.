@@ -112,6 +112,7 @@ namespace
             case styleUkg:        return out ({ { 128, 145 } });
             case styleLofi:       return out ({ { 60, 100 }, { 120, 200 } });
             case styleAfroTech:   return out ({ { 100, 150 } });
+            case styleDancehall:  return out ({ { 100, 170 } });   // edits from 108 to 165 BPM: the spectrum decides
             default:              return 0.0f;
         }
     }
@@ -122,8 +123,8 @@ int AutoMaster::detectStyle (const AudioFeatures& f, double bpm)
     if (f.hasSpectrum)
     {
         // Spectral distance to each style's references + tempo plausibility (0.15 per BPM outside the style's range).
-        // Lo-fi only for a dark, dynamic master. Leave-one-out on the 60 reference masters: 45/60, every Afro Tech
-        // found; the rest are house-family neighbours (Tech House / Afro), which sound close anyway.
+        // Lo-fi only for a dark, dynamic master. Leave-one-out on the 71 reference masters: 48/71, no false Dancehall;
+        // most misses are house-family neighbours (Tech House / Afro / Afro Tech), which sound close anyway.
         int best = styleTechHouse;
         float bestScore = 1.0e9f;
         for (int st = 1; st < numStyles; ++st)
@@ -131,6 +132,7 @@ int AutoMaster::detectStyle (const AudioFeatures& f, double bpm)
             float score = styleDistance (f, profile (st));
             if (bpm > 0) score += 0.15f * tempoOutside (st, bpm);
             if (st == styleLofi && ! (f.highRatio < 0.02f && f.plr > 10.0f)) score += 5.0f;
+            if (st == styleDancehall) score += 0.5f;   // very broad family (108-165 BPM edits): only when clearly closest
             if (score < bestScore) { bestScore = score; best = st; }
         }
         return best;
