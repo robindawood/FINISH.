@@ -73,7 +73,8 @@ LicenseManager::~LicenseManager()
 
 juce::String LicenseManager::sign (const juce::String& payload) const
 {
-    const auto msg = (payload + "|" + machine).toUTF8();
+    const juce::String text = payload + "|" + machine;      // keep the string alive while its UTF-8 bytes are read
+    const auto msg = text.toUTF8();
     return juce::String::toHexString (hmacSha256 (secret(), juce::MemoryBlock (msg.getAddress(), msg.sizeInBytes() - 1)).getData(), 32, 0);
 }
 
