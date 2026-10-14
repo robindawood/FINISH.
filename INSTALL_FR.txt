@@ -38,7 +38,5 @@ reçue par e-mail après l'achat : clic sur « ESSAI » / « ACTIVER », ou menu
 est nécessaire une seule fois, pour l'activation. Une clé fonctionne sur 5 ordinateurs.
 Sans licence après l'essai, WHALE coupe le son 2 secondes toutes les 40 secondes.
 
-VERSION BÊTA
-------------
-Cette version est une bêta : elle sert à valider le son à l'oreille avant la version finale.
-Voir NOTES_BETA_FR.txt pour ce qui a changé et ce qu'il faut tester.
+
+Support : mr.winkbeats@gmail.com
