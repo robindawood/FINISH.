@@ -1,6 +1,8 @@
 # WHALE changelog
 
 ## 1.1.0 beta 3
+- BEFORE at matched level: peaks held under the ceiling (no more overs into the monitors when a quiet mix is raised),
+  with a slow make-up to keep the loudness matched.
 - Interface, AUTO report, presets, licence messages and installer translated to English; INSTALL_EN.txt.
 
 ## 1.1.0 beta 2

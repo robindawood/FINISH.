@@ -25,6 +25,9 @@ void WhaleDSP::prepare (double sampleRate, int maxBlockSize, int numChannels)
     for (auto& s : sSpecDyn) s.reset (sr, 0.25);
     sLevOn.reset (sr, 0.05);
     sBypass.reset (sr, 0.02);
+    dryRelCoef = std::exp (-1.0f / (0.12f * (float) sr));
+    dryLimGain = 1.0f; dryMakeup = 1.0f; pDryWant = pDryGot = 0.0f;
+    dryMakeupRate = 1.0f / (1.5f * (float) sr);
 
     // SPECTRAL detectors (on the mid signal) and bells
     for (int b = 0; b < 4; ++b)
@@ -220,6 +223,7 @@ void WhaleDSP::process (juce::AudioBuffer<float>& buffer, const Settings& s) noe
     sDrive.setTargetValue (juce::jlimit (-12.0f, 30.0f, s.driveDb + corrDb));
     sCeil.setTargetValue (juce::jlimit (-6.0f, -0.1f, s.ceilingDb));
     sBypass.setTargetValue (s.bypass ? 1.0f : 0.0f);
+    dryCeil = dbToGain (std::min (s.ceilingDb, 0.0f) - 1.0f);
     for (int b = 0; b < 4; ++b)
     {
         sSpecGain[b].setTargetValue (juce::jlimit (-6.0f, 6.0f, s.specGainDb[b]));
@@ -597,7 +601,8 @@ void WhaleDSP::stageC (float* L, float* R, int n, const Settings& s) noexcept
             // path keeps running while SANS is heard, so the match stays right even just after a preset change.
             const float inShortLufs = powerToLufs (pInShort);
             const float gateLevel = s.loudInputLufs > -90.0f ? s.loudInputLufs - 8.0f : -50.0f;
-            if (pInShort > 1.0e-7f && inShortLufs >= gateLevel)
+            loudGate = pInShort > 1.0e-7f && inShortLufs >= gateLevel;
+            if (loudGate)
             {
                 pIn = matchCoef * pIn + (1 - matchCoef) * powIn;
                 pOut = matchCoef * pOut + (1 - matchCoef) * powOut;
@@ -611,8 +616,25 @@ void WhaleDSP::stageC (float* L, float* R, int n, const Settings& s) noexcept
 
         const float byp = sBypass.getNextValue();
         const float gm = s.matchAB ? matchGain : 1.0f;
-        ol += byp * (ddl * gm - ol);
-        orr += byp * (ddr * gm - orr);
+        // BEFORE at matched level: a quiet mix is raised by up to +24 dB, so its peaks are held under the ceiling
+        // (instant attack, 120 ms release) instead of going over 0 dBFS into the monitors.
+        // A slow make-up keeps BEFORE at the matched loudness despite the peak limiting.
+        float dl = ddl * gm * dryMakeup, dr = ddr * gm * dryMakeup;
+        {
+            const float pk = std::max (std::abs (dl), std::abs (dr));
+            const float want = pk > dryCeil ? dryCeil / pk : 1.0f;
+            dryLimGain = want < dryLimGain ? want : dryRelCoef * dryLimGain + (1 - dryRelCoef) * want;
+            dl *= dryLimGain; dr *= dryLimGain;
+            if (s.matchAB && loudGate)
+            {
+                pDryWant = matchCoef * pDryWant + (1 - matchCoef) * (ddl * ddl + ddr * ddr) * gm * gm;
+                pDryGot = matchCoef * pDryGot + (1 - matchCoef) * (dl * dl + dr * dr);
+                if (pDryGot > 1.0e-9f && pDryWant > 1.0e-9f)
+                    dryMakeup = juce::jlimit (1.0f, 4.0f, dryMakeup * (1.0f + dryMakeupRate * (std::sqrt (pDryWant / pDryGot) - 1.0f)));
+            }
+        }
+        ol += byp * (dl - ol);
+        orr += byp * (dr - orr);
 
         // What is heard: loudness, 4x true peak, low end mono
         {

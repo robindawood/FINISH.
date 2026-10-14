@@ -47,6 +47,7 @@ public:
     float getTruePeakDb() const noexcept         { return truePeakDb.load(); }
     float takeMaxPeakDb() noexcept               { return maxPeakDb.exchange (-100.0f); }
     float getMatchGainDb() const noexcept        { return matchDb.load(); }
+    float getDryMakeupDb() const noexcept        { return 20.0f * std::log10 (dryMakeup); }
     bool isMatchReady() const noexcept           { return matchReady.load(); }
     float getLoudnessCorrectionDb() const noexcept { return corrDbOut.load(); }
     float getBandGrDb (int b) const noexcept     { return bandGrOut[(size_t) juce::jlimit (0, 2, b)].load(); }
@@ -154,6 +155,8 @@ private:
     float accBassMid = 0, accBassSide = 0;
     std::atomic<float> heardLufs { -70.0f }, bassMonoOut { 1.0f };
     float matchSeconds = 0.0f;
+    float dryLimGain = 1.0f, dryRelCoef = 0.999f, dryCeil = 0.89f, dryMakeup = 1.0f, pDryWant = 0, pDryGot = 0, dryMakeupRate = 1.0e-5f;
+    bool loudGate = false;   // BEFORE at matched level: peak safety
     std::atomic<bool> matchReady { false };
     float pIn = 0, pOut = 0, pInShort = 0, pOutShort = 0, pOutMom = 0, matchCoef = 0, shortCoef = 0, momCoef = 0;
     float matchGain = 1.0f, matchSmoothCoef = 0, peakHoldDb = -100.0f, corrDb = 0.0f;

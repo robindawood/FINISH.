@@ -175,16 +175,23 @@ namespace
         p.prepareToPlay (sr, block);
         p.applyPreset (0);                 // Club Punch (clipper + glue: the limiter does not do all the work)
         setParam (p, PID::target, 3.0f);   // Club -8 -> loud passages at -7
-        MixGen gen; gen.gainDb = -20.0f;
+        MixGen gen; gen.gainDb = -14.0f;   // an unmastered mix with headroom (the BEFORE is raised ~15 dB to match)
         run (p, gen, 40.0);
         const float out = p.getDSP().getOutputLoudness();
         std::cout << "    output short-term " << out << " LUFS (target " << p.getEffectiveTarget() << "), corr " << p.getDSP().getLoudnessCorrectionDb() << " GR " << p.getDSP().getGainReductionDb() << "\n";
         CHECK (std::abs (out - p.getEffectiveTarget()) < 1.0f, "closed loop holds the target within 1 dB");
         setParam (p, PID::bypass, 1.0f);
-        run (p, gen, 6.0);
+        run (p, gen, 1.0);
+        p.getDSP().takeMaxPeakDb();
+        run (p, gen, 5.0);
+        const float bypPeak = p.getDSP().takeMaxPeakDb();
         const float byp = p.getDSP().getHeardLoudness();     // what is HEARD (the old test read the processed path)
-        std::cout << "    bypass (SANS) heard loudness " << byp << " LUFS, match gain " << p.getDSP().getMatchGainDb() << " dB\n";
-        CHECK (std::abs (byp - out) < 0.7f, "SANS is played at the same loudness as AVEC (within 0.7 dB)");
+        std::cout << "    BEFORE raised to the matched level: true peak " << bypPeak << " dBTP (ceiling " << p.state.getRawParameterValue (PID::ceiling)->load() << ")\n";
+        CHECK (bypPeak <= 0.0f, "BEFORE at matched level never goes over 0 dBTP");
+        std::cout << "    bypass (SANS) heard loudness " << byp << " LUFS, match gain " << p.getDSP().getMatchGainDb() << " dB, peak make-up " << p.getDSP().getDryMakeupDb() << " dB\n";
+        // the synthetic mix is far peakier than music (it needs > 12 dB of peak limiting once raised): 1.2 dB here,
+        // a real unmastered track needs 1-2 dB of make-up and lands within a few tenths
+        CHECK (std::abs (byp - out) < 1.2f, "BEFORE is played at the same loudness as AFTER (within 1.2 dB on a very peaky mix)");
         CHECK (p.isMatchMeasured(), "A/B match measured");
     }
 
@@ -621,6 +628,100 @@ namespace
         play (1.0);
     }
 
+    // Promo film: renders the real editor at 2x, 30 fps, while the real processor plays a song (looping bars 5-21 like the
+    // Ableton session), runs AUTO, then A/B and feature views. Writes JPEG frames, a frame log and the processed audio.
+    void runFilm (const juce::File& dir, const juce::String& wav)
+    {
+        dir.createDirectory();
+        constexpr int fb = 245;                          // 6 blocks per video frame at 30 fps (44100 / 30 = 1470)
+        WhaleAudioProcessor p;
+        p.setRateAndBufferSizeDetails (sr, fb);
+        p.prepareToPlay (sr, fb);
+        std::unique_ptr<WhaleEditor> ed (dynamic_cast<WhaleEditor*> (p.createEditor()));
+        juce::AudioFormatManager fm; fm.registerBasicFormats();
+        std::unique_ptr<juce::AudioFormatReader> rd (fm.createReaderFor (juce::File (wav)));
+        if (rd == nullptr) { ++failures; return; }
+        const juce::int64 loopA = (juce::int64) (7.35 * sr), loopB = (juce::int64) (37.3 * sr);
+        juce::int64 song = (juce::int64) (0.5 * sr);
+        juce::AudioBuffer<float> buf (2, fb), out (2, (int) (sr * 200));
+        juce::MidiBuffer midi;
+        juce::int64 run = 0;
+        int tick = 0;
+        juce::FileOutputStream log (dir.getChildFile ("frames.txt"));
+        log.setPosition (0); log.truncate();
+        juce::JPEGImageFormat jpg; jpg.setQuality (0.94f);
+        juce::String phase; int every = 0, idx = 0;
+        auto shoot = [&]
+        {
+            auto& c = TestAccess::content (*ed);
+            auto img = c.createComponentSnapshot (c.getLocalBounds(), true, 2.0f);
+            auto f = dir.getChildFile (phase + juce::String::formatted ("_%05d.jpg", idx));
+            f.deleteFile();
+            { juce::FileOutputStream os (f); jpg.writeImageToStream (img, os); }
+            log << phase << " " << idx << " " << run << " " << song << " " << (int) p.getAutoState() << " "
+                << (p.state.getRawParameterValue (PID::bypass)->load() > 0.5f ? 1 : 0) << "\n";
+            ++idx;
+        };
+        auto step = [&] (double seconds)
+        {
+            const int frames = (int) std::lround (seconds * 30.0);
+            for (int fr = 0; fr < frames; ++fr)
+            {
+                for (int k = 0; k < 6; ++k)
+                {
+                    if (song + fb > loopB) song = loopA;
+                    rd->read (&buf, 0, fb, song, true, true);
+                    buf.applyGain (juce::Decibels::decibelsToGain (0.0f));
+                    p.processBlock (buf, midi);
+                    if (run + fb <= out.getNumSamples())
+                        for (int c = 0; c < 2; ++c) out.copyFrom (c, (int) run, buf, c, 0, fb);
+                    run += fb; song += fb;
+                    if (k == 2 || k == 5) { TestAccess::pump (p); TestAccess::tickEditor (*ed); }
+                }
+                if (phase.isNotEmpty() && (tick++ % every) == 0) shoot();
+            }
+        };
+        auto setBypass = [&] (bool on) { setParam (p, PID::bypass, on ? 1.0f : 0.0f); };
+        auto seek = [&] (double s) { song = (juce::int64) std::llround (s * sr); };
+        auto until = [&] (double s) { while (song < (juce::int64) (s * sr) - 1470) step (1.0 / 30.0); };
+
+        // 1. idle, then AUTO on the drop; time-lapse at 10 fps
+        until (7.0);
+        phase = "tl"; every = 3; idx = 0; tick = 0;
+        step (1.0);
+        p.toggleAuto();
+        int guard = 0;
+        while (p.getAutoState() != WhaleAudioProcessor::AutoState::done && guard++ < 200 * 30) step (1.0 / 30.0);
+        step (2.0);
+        phase = "";
+        step (2.0);
+        // 2. the same drop as the Ableton footage, mastered, then live A/B on the plugin's own switch
+        seek (5.6); until (7.6);
+        phase = "main"; every = 1; idx = 0; tick = 0;
+        until (23.6);
+        phase = "ab"; idx = 0; tick = 0;
+        const double q = 3.375;
+        for (int k = 0; k < 4; ++k) { setBypass (k % 2 == 0); until (23.6 + q * (k + 1)); }
+        setBypass (false);
+        phase = "";
+        // 3. feature views
+        seek (11.5); step (0.5);
+        phase = "feat"; every = 1; idx = 0; tick = 0;
+        TestAccess::showBrowser (*ed); step (2.5);
+        TestAccess::hideBrowser (*ed); TestAccess::openExpert (*ed, 0); step (2.5);
+        TestAccess::openExpert (*ed, 7); step (2.5);
+        TestAccess::openExpert (*ed, 1); step (2.0);
+        TestAccess::openExpert (*ed, -1); step (2.0);
+        phase = "";
+        // audio
+        auto af = dir.getChildFile ("film.wav"); af.deleteFile();
+        juce::WavAudioFormat wavf;
+        std::unique_ptr<juce::AudioFormatWriter> wr (wavf.createWriterFor (new juce::FileOutputStream (af), sr, 2, 24, {}, 0));
+        wr->writeFromAudioSampleBuffer (out, 0, (int) std::min<juce::int64> (run, out.getNumSamples()));
+        std::cout << "dry make-up " << p.getDSP().getDryMakeupDb() << " dB, match " << p.getDSP().getMatchGainDb() << " dB\n";
+        std::cout << "film: " << run / sr << " s rendered, style " << styleNames()[p.getAutoResult().style] << "\n";
+    }
+
     void runSnapshots (const juce::File& dir, const juce::String& wav)
     {
         dir.createDirectory();
@@ -922,6 +1023,7 @@ int main (int argc, char** argv)
             }
         return 0;
     }
+    if (args[0] == "--film") { runFilm (juce::File::getCurrentWorkingDirectory().getChildFile (args[1]), args[2]); return failures; }
     if (args[0] == "--promo") { runPromo (juce::File::getCurrentWorkingDirectory().getChildFile (args[1]), args[2]); return failures; }
     if (args[0] == "--snap") { runSnapshots (juce::File::getCurrentWorkingDirectory().getChildFile (args[1]), args[2]); return failures; }
     if (args[0] == "--render") { renderFile (juce::File::getCurrentWorkingDirectory().getChildFile (args[1]), juce::File::getCurrentWorkingDirectory().getChildFile (args[2]), args[3].isEmpty() ? 0 : args[3].getIntValue()); return failures; }
