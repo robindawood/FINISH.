@@ -9,21 +9,21 @@ namespace
     juce::StringArray tabNames()
     {
         auto n = ChainStrip::names();
-        n.add ("RAPPORT AUTO");
+        n.add ("AUTO REPORT");
         return n;
     }
     const char* moduleIntro (int m)
     {
         switch (m)
         {
-            case 0: return "EQ dynamique : chaque bande a un réglage fixe et peut baisser seule quand sa zone déborde (pics de sub, bas-médium boueux, aigus agressifs).";
-            case 1: return "Compression 3 bandes (glue) + punch des transitoires. Détail = attaque plus lente : les attaques passent, le corps est tenu.";
-            case 2: return "Saturation douce suréchantillonnée x4 : densité et chaleur (harmoniques paires), sans repli d'aliasing.";
-            case 3: return "Largeur des côtés au-dessus des graves, et graves remis au centre sous la fréquence choisie (club, vinyle, mono).";
-            case 4: return "Étagères larges : basses à 110 Hz, air à 10 kHz.";
-            case 5: return "Clipper doux suréchantillonné x4 devant le limiteur : il rase les crêtes les plus fines pour gagner du volume sans pomper.";
-            case 6: return "Limiteur true-peak avec anticipation 1,5 ms. Cible de volume : style (références), streaming, club, ou à la main.";
-            default: return "Ce qu'AUTO a mesuré dans ton morceau, ce qu'il a réglé, et pourquoi.";
+            case 0: return "Dynamic EQ: each band has a fixed setting and dips on its own when its range spills over (sub peaks, muddy low-mids, harsh highs).";
+            case 1: return "3-band compression (glue) + transient punch. Detail = slower attack: the hits come through, the body is held.";
+            case 2: return "Soft saturation, 4x oversampled: density and warmth (even harmonics), no aliasing.";
+            case 3: return "Side width above the low end, and low end folded to the centre below the chosen frequency (club, vinyl, mono).";
+            case 4: return "Broad shelves: low end at 110 Hz, air at 10 kHz.";
+            case 5: return "Soft clipper, 4x oversampled, before the limiter: it shaves the thinnest peaks to gain loudness without pumping.";
+            case 6: return "True-peak limiter with 1.5 ms look-ahead. Loudness target: genre (references), streaming, club, or manual.";
+            default: return "What AUTO measured in your track, what it changed, and why.";
         }
     }
 }
@@ -61,35 +61,35 @@ void ExpertPanel::build()
         case 0:
             for (int b = 0; b < 4; ++b)
             {
-                addRow (PID::specGain[b], juce::String (specBands[b].name), fr ("réglage fixe"), b < 2 ? magenta : cyan, true);
-                addRow (PID::specFreq[b], fr ("   fréquence"), {}, cyan);
-                addRow (PID::specDyn[b], fr ("   dynamique"), fr ("baisse auto sur les pics"), violet);
+                addRow (PID::specGain[b], juce::String (specBands[b].name), fr ("fixed setting"), b < 2 ? magenta : cyan, true);
+                addRow (PID::specFreq[b], fr ("   frequency"), {}, cyan);
+                addRow (PID::specDyn[b], fr ("   dynamic"), fr ("automatic dip on peaks"), violet);
             }
             break;
         case 1:
-            addRow (PID::compGlue, "GLUE", fr ("tient les pics de chaque bande"), magenta);
-            addRow (PID::compPunch, "PUNCH", fr ("kick devant, queue du grave resserrée"), magenta);
-            addRow (PID::compDetail, fr ("DÉTAIL"), fr ("attaque plus lente = plus de transitoires"), cyan);
+            addRow (PID::compGlue, "GLUE", fr ("holds the peaks of each band"), magenta);
+            addRow (PID::compPunch, "PUNCH", fr ("kick forward, tighter low-end tail"), magenta);
+            addRow (PID::compDetail, fr ("DETAIL"), fr ("slower attack = more transients"), cyan);
             break;
         case 2:
-            addRow (PID::satDrive, "DRIVE", fr ("chaleur : harmoniques sur basses et bas-médium"), violet);
+            addRow (PID::satDrive, "DRIVE", fr ("warmth: harmonics on lows and low-mids"), violet);
             break;
         case 3:
-            addRow (PID::widthSide, fr ("CÔTÉS"), fr ("largeur au-dessus des graves"), cyan, true);
-            addRow (PID::widthMono, "MONO SOUS", fr ("graves au centre (0 = off)"), violet);
+            addRow (PID::widthSide, fr ("SIDES"), fr ("width above the low end"), cyan, true);
+            addRow (PID::widthMono, "MONO BELOW", fr ("low end in the centre (0 = off)"), violet);
             break;
         case 4:
-            addRow (PID::toneLow, "BASSES 110 Hz", fr ("étagère grave"), magenta, true);
-            addRow (PID::toneAir, "AIR 10 kHz", fr ("étagère aiguë"), cyan, true);
-            addRow (PID::lowCut, "COUPE-BAS", fr ("retire le grondement sous le kick (0 = off)"), violet);
+            addRow (PID::toneLow, "LOW 110 Hz", fr ("low shelf"), magenta, true);
+            addRow (PID::toneAir, "AIR 10 kHz", fr ("high shelf"), cyan, true);
+            addRow (PID::lowCut, "LOW CUT", fr ("removes rumble below the kick (0 = off)"), violet);
             break;
         case 5:
-            addRow (PID::clipAmt, "CLIPPER", fr ("part du travail avant le limiteur"), magenta);
+            addRow (PID::clipAmt, "CLIPPER", fr ("share of the work before the limiter"), magenta);
             break;
         case 6:
-            addRow (PID::ceiling, "PLAFOND", fr ("true peak maximum"), cyan);
-            addRow (PID::manualDrive, fr ("GAIN MANUEL"), fr ("utilisé en cible « Manual »"), violet, true);
-            addRow (PID::dosage, "DOSAGE", fr ("intensité des corrections"), magenta);
+            addRow (PID::ceiling, "CEILING", fr ("maximum true peak"), cyan);
+            addRow (PID::manualDrive, fr ("MANUAL GAIN"), fr ("used with the “Manual” target"), violet, true);
+            addRow (PID::dosage, "AMOUNT", fr ("strength of the corrections"), magenta);
             break;
         default: break;
     }
@@ -191,7 +191,7 @@ void ExpertPanel::drawSpectral (juce::Graphics& g, juce::Rectangle<float> r)
     }
     g.setColour (dim);
     g.setFont (mono (10.5f));
-    g.drawText (fr ("COURBE APPLIQUÉE (dosage inclus)  ·  trait cyan = baisse dynamique en direct"), r.reduced (10).removeFromTop (16), juce::Justification::centredLeft);
+    g.drawText (fr ("APPLIED CURVE (amount included)  ·  cyan line = live dynamic dip"), r.reduced (10).removeFromTop (16), juce::Justification::centredLeft);
 }
 
 void ExpertPanel::drawReport (juce::Graphics& g, juce::Rectangle<float> r)
@@ -202,7 +202,7 @@ void ExpertPanel::drawReport (juce::Graphics& g, juce::Rectangle<float> r)
     if (! res.valid || res.report.isEmpty())
     {
         g.setColour (dim);
-        g.drawText (fr ("AUTO n'a pas encore tourné : lance la lecture sur la partie la plus forte du morceau et clique sur AUTO."), r.withHeight (24), juce::Justification::centredLeft);
+        g.drawText (fr ("AUTO has not run yet: play the loudest part of the track and click AUTO."), r.withHeight (24), juce::Justification::centredLeft);
         return;
     }
     for (auto& l : res.report)
@@ -221,7 +221,7 @@ void ExpertPanel::drawReport (juce::Graphics& g, juce::Rectangle<float> r)
         y += 8;
         g.setColour (orange);
         g.setFont (bold (13.0f, 0.06f));
-        g.drawText (fr ("À RÉGLER DANS LE MIX (le master ne peut pas tout réparer)"), juce::Rectangle<float> (r.getX(), y, r.getWidth(), 18), juce::Justification::centredLeft);
+        g.drawText (fr ("TO FIX IN THE MIX (mastering cannot repair everything)"), juce::Rectangle<float> (r.getX(), y, r.getWidth(), 18), juce::Justification::centredLeft);
         y += 24;
         for (auto& l : res.mixNotes)
         {
@@ -266,7 +266,7 @@ void ExpertPanel::paint (juce::Graphics& g)
         const auto r = graphBounds();
         g.setColour (juce::Colour (0xff0b0719));
         g.fillRoundedRectangle (r, 10.0f);
-        const char* names[3] = { "BAS < 120 Hz", "MILIEU", "HAUT > 4 kHz" };
+        const char* names[3] = { "LOW < 120 Hz", "MID", "HIGH > 4 kHz" };
         for (int k = 0; k < 3; ++k)
         {
             const float x = r.getX() + 30 + (float) k * (r.getWidth() - 60) / 3.0f, w = (r.getWidth() - 60) / 3.0f - 30;
@@ -300,7 +300,7 @@ void ExpertPanel::paint (juce::Graphics& g)
         const auto tb = targetBox.getBounds().toFloat();
         g.setColour (text);
         g.setFont (bold (13.0f, 0.03f));
-        g.drawText ("CIBLE", juce::Rectangle<float> (x0, tb.getY() + 6, 185, 18), juce::Justification::centredLeft);
+        g.drawText ("TARGET", juce::Rectangle<float> (x0, tb.getY() + 6, 185, 18), juce::Justification::centredLeft);
     }
 }
 

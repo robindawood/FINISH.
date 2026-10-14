@@ -1,5 +1,8 @@
 # WHALE changelog
 
+## 1.1.0 beta 3
+- Interface, AUTO report, presets, licence messages and installer translated to English; INSTALL_EN.txt.
+
 ## 1.1.0 beta 2
 - Licence: 7-day full trial, Gumroad licence key activation (online once, then offline, signed file bound to the
   computer, 5 computers per key, 30-day background re-check), 2 s of silence every 40 s after the trial.

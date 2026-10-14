@@ -52,7 +52,7 @@ void LicensePanel::refresh()
     keyField.setVisible (st != LicenseManager::Status::activated);
     if (! working && message.isEmpty() && st == LicenseManager::Status::expired)
     {
-        message = fr ("L'essai de 7 jours est terminé : WHALE coupe le son 2 s toutes les 40 s jusqu'à l'activation.");
+        message = fr ("The 7-day trial is over: WHALE mutes the sound for 2 s every 40 s until it is activated.");
         messageColour = orange;
     }
     repaint();
@@ -63,13 +63,13 @@ void LicensePanel::startActivation()
     if (working) return;
     if (keyField.getText().trim().isEmpty())
     {
-        message = fr ("Colle d'abord ta clé de licence (reçue par e-mail après l'achat).");
+        message = fr ("Paste your license key first (sent by e-mail after your purchase).");
         messageColour = orange;
         repaint();
         return;
     }
     working = true;
-    message = fr ("Vérification de la clé auprès de Gumroad…");
+    message = fr ("Checking the key with Gumroad…");
     messageColour = cyan;
     repaint();
     juce::Component::SafePointer<LicensePanel> safe (this);
@@ -113,18 +113,18 @@ void LicensePanel::paint (juce::Graphics& g)
     juce::Colour lineCol = dim;
     if (st == LicenseManager::Status::activated)
     {
-        line = fr ("Licence activée") + (lic.getEmail().isNotEmpty() ? fr (" — ") + lic.getEmail() : juce::String());
+        line = fr ("License activated") + (lic.getEmail().isNotEmpty() ? fr (" — ") + lic.getEmail() : juce::String());
         lineCol = green;
     }
     else if (st == LicenseManager::Status::trial)
     {
         const int d = lic.trialDaysLeft();
-        line = fr ("Version d'essai complète : ") + juce::String (d) + (d > 1 ? fr (" jours restants") : fr (" jour restant"));
+        line = fr ("Full trial version: ") + juce::String (d) + (d > 1 ? fr (" days left") : fr (" day left"));
         lineCol = cyan;
     }
     else
     {
-        line = fr ("Essai terminé");
+        line = fr ("Trial over");
         lineCol = orange;
     }
     g.setColour (lineCol);
@@ -134,7 +134,7 @@ void LicensePanel::paint (juce::Graphics& g)
     {
         g.setColour (dim);
         g.setFont (body (13.0f));
-        g.drawText (fr ("Clé de licence (dans l'e-mail Gumroad reçu après l'achat) :"), x, y + 122, w, 20, juce::Justification::centred);
+        g.drawText (fr ("License key (in the Gumroad e-mail you received after purchase):"), x, y + 122, w, 20, juce::Justification::centred);
         const auto kb = keyField.getBounds().toFloat();
         g.setColour (field);
         g.fillRoundedRectangle (kb, 8.0f);
@@ -147,20 +147,20 @@ void LicensePanel::paint (juce::Graphics& g)
         g.fillRoundedRectangle (ab, ab.getHeight() * 0.5f);
         g.setColour (juce::Colours::white);
         g.setFont (bold (15.0f, 0.08f));
-        g.drawText (working ? fr ("VÉRIFICATION…") : fr ("ACTIVER"), ab.toNearestInt(), juce::Justification::centred);
+        g.drawText (working ? fr ("CHECKING…") : fr ("ACTIVATE"), ab.toNearestInt(), juce::Justification::centred);
 
         if (juce::String (LicenseManager::buyUrl).isNotEmpty())
         {
             g.setColour (hover == 2 ? text : cyan);
             g.setFont (bold (13.5f));
-            g.drawText (fr ("Pas encore de clé ? Acheter WHALE Mastering (49 €)"), buyBounds(), juce::Justification::centred);
+            g.drawText (fr ("No key yet? Buy WHALE Mastering (€49)"), buyBounds(), juce::Justification::centred);
         }
     }
     else
     {
         g.setColour (dim);
         g.setFont (body (13.0f));
-        g.drawText (fr ("Merci pour ton achat ! WHALE fonctionne maintenant sans connexion."), x, y + 150, w, 20, juce::Justification::centred);
+        g.drawText (fr ("Thanks for your purchase! WHALE now works offline."), x, y + 150, w, 20, juce::Justification::centred);
     }
 
     if (message.isNotEmpty())

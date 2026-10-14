@@ -181,19 +181,19 @@ LicenseManager::Result LicenseManager::activate (const juce::String& rawKey)
 {
     auto fr = [] (const char* s) { return juce::String (juce::CharPointer_UTF8 (s)); };
     const auto key = normaliseKey (rawKey);
-    if (key.length() < 8) return { false, fr ("Colle la clé reçue par e-mail après l'achat (format XXXXXXXX-XXXXXXXX-XXXXXXXX-XXXXXXXX).") };
+    if (key.length() < 8) return { false, fr ("Paste the key you received by e-mail after your purchase (format XXXXXXXX-XXXXXXXX-XXXXXXXX-XXXXXXXX).") };
     const auto r = verifier (key, true);
     if (! r.reached)
-        return { false, fr ("Impossible de joindre Gumroad. Vérifie ta connexion internet et réessaie (la connexion n'est nécessaire qu'une fois).") };
+        return { false, fr ("Cannot reach Gumroad. Check your internet connection and try again (it is only needed once).") };
     if (! r.success)
     {
-        if (r.message.containsIgnoreCase ("disabled")) return { false, fr ("Cette clé a été désactivée. Écris à ") + supportEmail + "." };
-        return { false, fr ("Clé inconnue pour WHALE Mastering. Vérifie qu'elle est complète (copie-colle depuis l'e-mail de Gumroad).") };
+        if (r.message.containsIgnoreCase ("disabled")) return { false, fr ("This key has been disabled. Write to ") + supportEmail + "." };
+        return { false, fr ("Unknown key for WHALE Mastering. Check that it is complete (copy-paste it from the Gumroad e-mail).") };
     }
-    if (r.refunded) return { false, fr ("Cet achat a été remboursé : la clé n'est plus valable.") };
+    if (r.refunded) return { false, fr ("This purchase was refunded: the key is no longer valid.") };
     if (r.uses > maxActivations)
-        return { false, fr ("Cette clé a déjà été activée sur ") + juce::String (r.uses - 1) + fr (" ordinateurs (maximum ") + juce::String (maxActivations)
-                        + fr ("). Écris à ") + supportEmail + fr (" pour libérer un ordinateur.") };
+        return { false, fr ("This key is already activated on ") + juce::String (r.uses - 1) + fr (" computers (maximum ") + juce::String (maxActivations)
+                        + fr ("). Write to ") + supportEmail + fr (" to free up a computer.") };
     {
         const juce::ScopedLock sl (lock);
         rec.key = key; rec.email = r.email;
@@ -202,7 +202,7 @@ LicenseManager::Result LicenseManager::activate (const juce::String& rawKey)
     }
     status.store (Status::activated);
     save();
-    return { true, fr ("WHALE Mastering est activé") + (r.email.isNotEmpty() ? fr (" pour ") + r.email : juce::String()) + fr (". Merci !") };
+    return { true, fr ("WHALE Mastering is activated") + (r.email.isNotEmpty() ? fr (" for ") + r.email : juce::String()) + fr (". Thank you!") };
 }
 
 void LicenseManager::activateAsync (const juce::String& key, std::function<void (Result)> done)

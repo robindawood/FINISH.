@@ -795,10 +795,10 @@ static void testLicense()
         auto m = make();
         reply = {}; reply.reached = false;
         auto r = m->activate ("6F0E4C97-B72A4E69-A11BF6C4-AF6517E7");
-        CHECK (! r.ok && r.message.contains ("connexion") && m->getStatus() == LM::Status::trial, "no connection: clear message, nothing changes");
+        CHECK (! r.ok && r.message.contains ("connection") && m->getStatus() == LM::Status::trial, "no connection: clear message, nothing changes");
         reply = {}; reply.reached = true; reply.success = false; reply.message = "That license does not exist for the provided product.";
         r = m->activate ("BAD-KEY-123456");
-        CHECK (! r.ok && r.message.contains (juce::CharPointer_UTF8 ("Clé inconnue")), "unknown key refused");
+        CHECK (! r.ok && r.message.contains ("Unknown key"), "unknown key refused");
         reply = {}; reply.reached = true; reply.success = true; reply.uses = 1; reply.refunded = true;
         CHECK (! m->activate ("6F0E4C97-B72A4E69-A11BF6C4-AF6517E7").ok, "refunded purchase refused");
         reply.refunded = false; reply.uses = LM::maxActivations + 1;

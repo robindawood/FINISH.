@@ -7,10 +7,10 @@ namespace
 {
     juce::StringArray catNames()
     {
-        juce::StringArray c { "TOUS" };
+        juce::StringArray c { "ALL" };
         for (int s = 1; s < numStyles; ++s) c.add (styleShortNames()[s]);
-        c.add ("FAVORIS");
-        c.add ("MES PRESETS");
+        c.add ("FAVORITES");
+        c.add ("MY PRESETS");
         return c;
     }
     constexpr float rowH = 62.0f;
@@ -19,7 +19,7 @@ namespace
 
 PresetBrowser::PresetBrowser (WhaleAudioProcessor& p) : proc (p)
 {
-    search.setTextToShowWhenEmpty (fr ("Rechercher un preset…"), dim);
+    search.setTextToShowWhenEmpty (fr ("Search presets…"), dim);
     search.setFont (body (14.0f));
     search.setIndents (30, 7);
     search.setColour (juce::TextEditor::backgroundColourId, juce::Colours::transparentBlack);
@@ -154,7 +154,7 @@ void PresetBrowser::paint (juce::Graphics& g)
         }
         g.setColour (dim);
         g.setFont (body (13.0f));
-        g.drawText (pr.description + (pr.factory ? juce::String() : fr ("  ·  à toi")), r.withTrimmedLeft (18).withTrimmedTop (r.getHeight() * 0.52f).withTrimmedRight (200),
+        g.drawText (pr.description + (pr.factory ? juce::String() : fr ("  ·  yours")), r.withTrimmedLeft (18).withTrimmedTop (r.getHeight() * 0.52f).withTrimmedRight (200),
                     juce::Justification::centredLeft);
         // target chip
         const juce::Rectangle<float> chip (r.getRight() - 170, r.getCentreY() - 13, 110, 26);
@@ -173,7 +173,7 @@ void PresetBrowser::paint (juce::Graphics& g)
     {
         g.setColour (dim);
         g.setFont (body (14.0f));
-        g.drawText (category == catMine ? fr ("Pas encore de preset à toi : règle WHALE puis « Sauver mon preset ».") : fr ("Aucun preset ici."),
+        g.drawText (category == catMine ? fr ("No presets of your own yet: set WHALE up, then “Save my preset”.") : fr ("No presets here."),
                     juce::Rectangle<float> (p.getX() + 250, p.getY() + 90, p.getWidth() - 280, 30), juce::Justification::centredLeft);
     }
     g.restoreState();
@@ -188,10 +188,10 @@ void PresetBrowser::paint (juce::Graphics& g)
     g.drawRoundedRectangle (s, 16.0f, 1.2f);
     g.setColour (juce::Colours::white);
     g.setFont (bold (13.0f, 0.04f));
-    g.drawText (fr ("+ SAUVER MON PRESET"), s, juce::Justification::centred);
+    g.drawText (fr ("+ SAVE MY PRESET"), s, juce::Justification::centred);
     g.setColour (dim);
     g.setFont (body (13.0f));
-    g.drawText (fr ("Astuce : choisis un preset puis AUTO pour l'adapter à ton morceau.   Échap pour fermer"),
+    g.drawText (fr ("Tip: pick a preset, then AUTO to fit it to your track.   Esc to close"),
                 juce::Rectangle<float> (s.getRight() + 20, s.getY(), p.getRight() - s.getRight() - 40, s.getHeight()), juce::Justification::centredRight);
 }
 
@@ -212,11 +212,11 @@ void PresetBrowser::mouseWheelMove (const juce::MouseEvent&, const juce::MouseWh
 
 void PresetBrowser::saveCurrent()
 {
-    auto* w = new juce::AlertWindow (fr ("Sauver mon preset"), fr ("Nom du preset :"), juce::MessageBoxIconType::NoIcon, this);
-    w->addTextEditor ("name", proc.presets.getCurrentName() == "Init" ? fr ("Mon master") : proc.presets.getCurrentName() + fr (" (perso)"));
-    w->addTextEditor ("desc", "", fr ("Description (facultatif) :"));
-    w->addButton ("SAUVER", 1, juce::KeyPress (juce::KeyPress::returnKey));
-    w->addButton ("ANNULER", 0, juce::KeyPress (juce::KeyPress::escapeKey));
+    auto* w = new juce::AlertWindow (fr ("Save my preset"), fr ("Preset name:"), juce::MessageBoxIconType::NoIcon, this);
+    w->addTextEditor ("name", proc.presets.getCurrentName() == "Init" ? fr ("My master") : proc.presets.getCurrentName() + fr (" (mine)"));
+    w->addTextEditor ("desc", "", fr ("Description (optional):"));
+    w->addButton ("SAVE", 1, juce::KeyPress (juce::KeyPress::returnKey));
+    w->addButton ("CANCEL", 0, juce::KeyPress (juce::KeyPress::escapeKey));
     juce::Component::SafePointer<PresetBrowser> sp (this);
     w->enterModalState (true, juce::ModalCallbackFunction::create ([sp, w] (int result)
     {

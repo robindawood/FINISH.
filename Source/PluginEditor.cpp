@@ -30,19 +30,19 @@ WhaleEditor::WhaleEditor (WhaleAudioProcessor& p)
     dosage.setColour (juce::Slider::trackColourId, magenta);
     dosageAtt = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (proc.state, PID::dosage, dosage);
     dosage.onValueChange = [this] { content.repaint (dosage.getBounds().expanded (0, 22)); };
-    styleBox.setTooltip (fr ("Style de référence. « Auto » : WHALE le détecte (tempo + équilibre du son)."));
-    targetBox.setTooltip (fr ("Cible de volume. « Style » = le volume mesuré sur les masters de référence du style."));
-    dosage.setTooltip (fr ("Intensité des corrections d'AUTO et du preset (le volume cible n'est pas concerné)."));
+    styleBox.setTooltip (fr ("Reference style. “Auto”: WHALE detects it (tempo + tonal balance)."));
+    targetBox.setTooltip (fr ("Loudness target. “Style” = the loudness measured on the style's reference masters."));
+    dosage.setTooltip (fr ("Strength of AUTO's and the preset's corrections (the loudness target is not affected)."));
 
     struct K { const char* id; const char* name; juce::Colour c; };
-    const K ks[8] = { { PID::mGlue, "GLUE", magenta }, { PID::mPunch, "PUNCH", magenta }, { PID::mWarmth, "CHALEUR", violet }, { PID::mAir, "AIR", cyan },
-                      { PID::mWidth, "LARGEUR", cyan }, { PID::mBass, "BASSES", violet }, { PID::mDetail, fr ("DÉTAIL").toRawUTF8(), cyan }, { PID::mLoud, "LOUDNESS", magenta } };
-    const char* tips[8] = { "Colle le mix : tient les pics de chaque bande", "Renforce les attaques (kick, caisse claire)", "Saturation douce : densité et chaleur",
-                            "Brillance au-dessus de 10 kHz", "Largeur stéréo (les graves restent au centre)", "Grave autour de 110 Hz",
-                            "Présence 3,5 kHz + transitoires", "Volume : +/- 3 dB autour de la cible" };
+    const K ks[8] = { { PID::mGlue, "GLUE", magenta }, { PID::mPunch, "PUNCH", magenta }, { PID::mWarmth, "WARMTH", violet }, { PID::mAir, "AIR", cyan },
+                      { PID::mWidth, "WIDTH", cyan }, { PID::mBass, "BASS", violet }, { PID::mDetail, "DETAIL", cyan }, { PID::mLoud, "LOUDNESS", magenta } };
+    const char* tips[8] = { "Glues the mix: holds the peaks of each band", "Boosts the hits (kick, snare)", "Soft saturation: density and warmth",
+                            "Brightness above 10 kHz", "Stereo width (the low end stays in the centre)", "Low end around 110 Hz",
+                            "Presence at 3.5 kHz + transients", "Loudness: +/- 3 dB around the target" };
     for (int i = 0; i < 8; ++i)
     {
-        knobs.push_back (std::make_unique<MacroKnob> (proc.state, ks[i].id, fr (i == 6 ? "D\xc3\x89TAIL" : ks[i].name), ks[i].c));
+        knobs.push_back (std::make_unique<MacroKnob> (proc.state, ks[i].id, fr (ks[i].name), ks[i].c));
         knobs.back()->slider.setTooltip (fr (tips[i]));
         content.addAndMakeVisible (*knobs.back());
     }
@@ -59,11 +59,11 @@ WhaleEditor::WhaleEditor (WhaleAudioProcessor& p)
     if (proc.licence.isLocked()) showLicence (true);
 
     autoButton.onClick = [this] { proc.toggleAuto(); };
-    autoButton.setTooltip (fr ("Lance la lecture (idéalement depuis le début du drop), puis clique : WHALE écoute 30 s, règle la chaîne, puis mesure le son traité et corrige ce qui reste. Re-clique pendant l'analyse pour annuler ; après, « Annuler AUTO » remet les réglages d'avant."));
+    autoButton.setTooltip (fr ("Start playback (ideally at the start of the drop), then click: WHALE listens for 30 s, sets the chain, then measures the processed sound and fine-tunes what is left. Click again during the analysis to cancel; afterwards, “Undo AUTO” restores your previous settings."));
     expertLink.onClick = [this] { openExpert (expert.isVisible() ? -1 : 0); };
     menuLink.onClick = [this] { showMenu(); };
     undoAutoLink.onClick = [this] { proc.undoAuto(); };
-    undoAutoLink.setTooltip (fr ("Revenir exactement aux réglages d'avant AUTO (preset, boutons, cible)"));
+    undoAutoLink.setTooltip (fr ("Go back to exactly the settings you had before AUTO (preset, knobs, target)"));
     chain.onOpenModule = [this] (int m) { openExpert (m); };
     presetBar.onOpen = [this] { browser.refresh(); browser.setVisible (! browser.isVisible()); expert.setVisible (false); };
     presetBar.onStep = [this] (int d)
@@ -170,13 +170,13 @@ void WhaleEditor::Content::paint (juce::Graphics& g)
     g.setFont (mono (10.5f, 0.1f));
     g.setColour (dim);
     g.drawText ("STYLE", 210, 582, 150, 14, juce::Justification::centredLeft);
-    g.drawText ("CIBLE", 210, 642, 150, 14, juce::Justification::centredLeft);
-    g.drawText ("DOSAGE", 210, 700, 100, 14, juce::Justification::centredLeft);
+    g.drawText ("TARGET", 210, 642, 150, 14, juce::Justification::centredLeft);
+    g.drawText ("AMOUNT", 210, 700, 100, 14, juce::Justification::centredLeft);
     g.setColour (text);
     g.drawText (juce::String (juce::roundToInt (owner.dosage.getValue() * 100)) + " %", 300, 700, 60, 14, juce::Justification::centredRight);
     g.setColour (dim);
-    g.drawText (fr ("CARACTÈRE"), 400, 580, 200, 14, juce::Justification::centredLeft);
-    g.drawText (fr ("ESPACE & NIVEAU"), 718, 580, 200, 14, juce::Justification::centredLeft);
+    g.drawText (fr ("CHARACTER"), 400, 580, 200, 14, juce::Justification::centredLeft);
+    g.drawText (fr ("SPACE & LEVEL"), 718, 580, 200, 14, juce::Justification::centredLeft);
     g.setColour (line);
     g.drawHorizontalLine (587, 480.0f, 680.0f);
     g.drawHorizontalLine (587, 840.0f, 966.0f);
@@ -202,15 +202,15 @@ void WhaleEditor::setReducedAnimations (bool r) { proc.state.state.setProperty (
 void WhaleEditor::showMenu()
 {
     juce::PopupMenu m;
-    m.addItem (1, fr ("Rapport AUTO (ce qui a été fait)"));
-    m.addItem (2, fr ("Animations réduites (ordinateurs moins puissants)"), true, reducedAnimations());
+    m.addItem (1, fr ("AUTO report (what was done)"));
+    m.addItem (2, fr ("Reduced animations (slower computers)"), true, reducedAnimations());
     m.addSeparator();
-    m.addItem (6, fr ("Annuler AUTO (revenir aux réglages d'avant)"), proc.canUndoAuto());
-    m.addItem (3, fr ("Tout remettre à neutre"));
-    m.addItem (4, fr ("Ouvrir le dossier de mes presets"));
-    m.addItem (7, proc.licence.getStatus() == LicenseManager::Status::activated ? fr ("Licence (activée)") : fr ("Licence : activer WHALE…"));
+    m.addItem (6, fr ("Undo AUTO (back to the previous settings)"), proc.canUndoAuto());
+    m.addItem (3, fr ("Reset everything to neutral"));
+    m.addItem (4, fr ("Open my presets folder"));
+    m.addItem (7, proc.licence.getStatus() == LicenseManager::Status::activated ? fr ("License (activated)") : fr ("License: activate WHALE…"));
     m.addSeparator();
-    m.addItem (5, juce::String ("WHALE ") + WHALE_VERSION_STRING + fr (" — mastering par styles de référence"), false);
+    m.addItem (5, juce::String ("WHALE ") + WHALE_VERSION_STRING + fr (" — mastering by reference styles"), false);
     m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (menuLink), [this] (int r)
     {
         if (r == 1) openExpert (7);
@@ -235,13 +235,13 @@ void WhaleEditor::updateLicenceLink()
     licenceLink.setVisible (st != LicenseManager::Status::activated);
     if (st == LicenseManager::Status::trial)
     {
-        licenceLink.setText (fr ("ESSAI · ") + juce::String (proc.licence.trialDaysLeft()) + " J");
-        licenceLink.setTooltip (fr ("Version d'essai complète. Clique pour activer ta licence."));
+        licenceLink.setText (fr ("TRIAL · ") + juce::String (proc.licence.trialDaysLeft()) + "D");
+        licenceLink.setTooltip (fr ("Full trial version. Click to activate your license."));
     }
     else
     {
-        licenceLink.setText (fr ("ACTIVER"));
-        licenceLink.setTooltip (fr ("Essai terminé : WHALE coupe le son 2 s toutes les 40 s. Clique pour activer ta licence."));
+        licenceLink.setText (fr ("ACTIVATE"));
+        licenceLink.setTooltip (fr ("Trial over: WHALE mutes the sound for 2 s every 40 s. Click to activate your license."));
     }
     licenceLink.active = st == LicenseManager::Status::expired;
 }
@@ -272,14 +272,14 @@ void WhaleEditor::timerCallback()
     rows[0] = { "TRUE PEAK", sound ? juce::String (tpHold, 1) + " dBTP" : "--", juce::jlimit (0.0f, 1.0f, (tpHold + 24.0f) / 24.0f),
                 (! dry && tpHold > ceil + 0.1f) || tpHold > 0.0f ? red : green };
     // distance of the heard 1/3-octave balance to the style's references (the preset's colour is not counted)
-    rows[1] = { fr ("TONALITÉ"), (sound && tone >= 0) ? juce::String (tone, 1) + " dB" : "--", tone < 0 ? 0.0f : juce::jlimit (0.0f, 1.0f, 1.0f - tone / 3.0f),
+    rows[1] = { fr ("TONE"), (sound && tone >= 0) ? juce::String (tone, 1) + " dB" : "--", tone < 0 ? 0.0f : juce::jlimit (0.0f, 1.0f, 1.0f - tone / 3.0f),
                 tone < 0 ? dim : tone < 1.0f ? green : tone < 2.0f ? orange : red };
     // peak-to-loudness vs what the loudness target leaves: lower = squashed
-    rows[2] = { "DYNAMIQUE", sound ? juce::String (plr, 1) + " dB" : "--", juce::jlimit (0.0f, 1.0f, plr / 14.0f),
+    rows[2] = { "DYNAMICS", sound ? juce::String (plr, 1) + " dB" : "--", juce::jlimit (0.0f, 1.0f, plr / 14.0f),
                 dry ? cyan : plr >= expCrest - 1.0f ? green : plr >= expCrest - 2.5f ? orange : red };
-    rows[3] = { fr ("STÉRÉO"), sound ? (corr >= 0 ? "+" : "") + juce::String (corr, 2) : "--", juce::jlimit (0.0f, 1.0f, (corr + 1.0f) * 0.5f),
+    rows[3] = { fr ("STEREO"), sound ? (corr >= 0 ? "+" : "") + juce::String (corr, 2) : "--", juce::jlimit (0.0f, 1.0f, (corr + 1.0f) * 0.5f),
                 corr < 0.0f ? red : corr < 0.25f ? orange : green };
-    rows[4] = { "GRAVES MONO", sound ? juce::String (juce::roundToInt (monoPct)) + " %" : "--", juce::jlimit (0.0f, 1.0f, monoPct / 100.0f),
+    rows[4] = { "MONO BASS", sound ? juce::String (juce::roundToInt (monoPct)) + " %" : "--", juce::jlimit (0.0f, 1.0f, monoPct / 100.0f),
                 monoPct >= 90.0f ? green : monoPct >= 75.0f ? orange : red };
     if (! sound)
         for (auto& r : rows) { r.bar = 0.0f; r.colour = dim; }        // nothing heard: no verdict on the meters
@@ -287,9 +287,9 @@ void WhaleEditor::timerCallback()
     {
         const bool match = proc.state.getRawParameterValue (PID::match)->load() > 0.5f;
         const float g = d.getMatchGainDb();
-        ab.setCaption (! match ? fr ("SANS au volume d'origine")
-                               : (proc.isMatchMeasured() ? fr ("SANS à volume égal (") + (g >= 0 ? "+" : "") + juce::String (g, 1) + " dB)"
-                                                         : fr ("SANS à volume égal (mesure…)")));
+        ab.setCaption (! match ? fr ("BEFORE at its original level")
+                               : (proc.isMatchMeasured() ? fr ("BEFORE at matched level (") + (g >= 0 ? "+" : "") + juce::String (g, 1) + " dB)"
+                                                         : fr ("BEFORE at matched level (measuring…)")));
     }
 
     // ---- chain activity
@@ -308,9 +308,9 @@ void WhaleEditor::timerCallback()
     // ---- AUTO button
     const auto st = proc.getAutoState();
     if (st == WhaleAudioProcessor::AutoState::listening || st == WhaleAudioProcessor::AutoState::verifying)
-        autoButton.setState (1, proc.getAutoProgress(), proc.isWaitingForAudio() ? fr ("EN ATTENTE") : juce::String (juce::roundToInt (proc.getAutoProgress() * 100)) + " %");
+        autoButton.setState (1, proc.getAutoProgress(), proc.isWaitingForAudio() ? fr ("WAITING") : juce::String (juce::roundToInt (proc.getAutoProgress() * 100)) + " %");
     else if (st == WhaleAudioProcessor::AutoState::done)
-        autoButton.setState (2, 1.0f, fr ("TERMINÉ"));
+        autoButton.setState (2, 1.0f, fr ("DONE"));
     else
         autoButton.setState (0, 0.0f, "MASTER");
     autoButton.tick (dt);
@@ -324,7 +324,7 @@ void WhaleEditor::timerCallback()
         const int cur = proc.presets.getCurrent();
         const auto& all = proc.presets.getAll();
         juce::String name = "Init", cat;
-        if (juce::isPositiveAndBelow (cur, all.size())) { name = all[cur].name; cat = all[cur].factory ? styleShortNames()[all[cur].style] : fr ("MES PRESETS"); }
+        if (juce::isPositiveAndBelow (cur, all.size())) { name = all[cur].name; cat = all[cur].factory ? styleShortNames()[all[cur].style] : fr ("MY PRESETS"); }
         else if (proc.getAutoResult().valid && st != WhaleAudioProcessor::AutoState::idle) { name = fr ("Master AUTO"); cat = styleShortNames()[proc.getAutoResult().style]; }
         presetBar.set (name, cat, cur >= 0 && proc.presets.isFavourite (name), browser.isVisible());
     }
@@ -356,19 +356,19 @@ void WhaleEditor::timerCallback()
     in.lufsText = lufsSmooth > -60 ? juce::String (lufsSmooth, 1) : "--";
     const int tIdx = (int) proc.state.getRawParameterValue (PID::target)->load();
     const float tgt = proc.getEffectiveTarget() + 6.0f * (knobs[7]->slider.getValue() - 0.5f);
-    in.targetText = proc.isTargetLoudnessMode() ? fr ("CIBLE DES DROPS ") + juce::String (tgt, 1) + " LUFS (" + (tIdx == styleTarget ? styleShortNames()[proc.getActiveStyle()] : juce::String (loudnessTargets[tIdx].shortName)) + ")"
+    in.targetText = proc.isTargetLoudnessMode() ? fr ("DROP TARGET ") + juce::String (tgt, 1) + " LUFS (" + (tIdx == styleTarget ? styleShortNames()[proc.getActiveStyle()] : juce::String (loudnessTargets[tIdx].shortName)) + ")"
                                                 : juce::String (loudnessTargets[tIdx].shortName);
     in.meter = juce::jlimit (0.0f, 1.0f, (lufsSmooth + 30.0f) / 26.0f);
     if (st == WhaleAudioProcessor::AutoState::listening)
-        in.caption = proc.isWaitingForAudio() ? fr ("AUTO : lance la lecture sur la partie la plus forte (drop / refrain)") : fr ("AUTO écoute ton morceau… la baleine remonte vers la cible");
-    else if (st == WhaleAudioProcessor::AutoState::verifying) in.caption = fr ("AUTO a réglé la chaîne et vérifie le résultat");
+        in.caption = proc.isWaitingForAudio() ? fr ("AUTO: play the loudest part (drop / chorus)") : fr ("AUTO is listening to your track… the whale rises to the target");
+    else if (st == WhaleAudioProcessor::AutoState::verifying) in.caption = fr ("AUTO has set the chain and is checking the result");
     else if (st == WhaleAudioProcessor::AutoState::done)
         {
             const auto& ar = proc.getAutoResult();
-            in.caption = fr ("Style ") + styleShortNames()[ar.style] + (ar.styleAlt > 0 ? fr (" (proche ") + styleShortNames()[ar.styleAlt] + ")" : juce::String())
-                       + fr (" — rapport complet : menu ≡ ou EXPERT › RAPPORT AUTO");
+            in.caption = fr ("Style ") + styleShortNames()[ar.style] + (ar.styleAlt > 0 ? fr (" (close to ") + styleShortNames()[ar.styleAlt] + ")" : juce::String())
+                       + fr (" — full report: menu ≡ or EXPERT › AUTO REPORT");
         }
-    else if (! sound) in.caption = fr ("Lance la lecture, choisis un preset ou clique sur AUTO");
+    else if (! sound) in.caption = fr ("Start playback, pick a preset or click AUTO");
     scene.advance (in, dt);
     scene.repaint();
     if (expert.isVisible() && frameCounter % 3 == 0) expert.tick();

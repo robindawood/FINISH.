@@ -166,9 +166,9 @@ namespace
 {
     constexpr int nb = 29;
     constexpr int anchorLo = 9, anchorHi = 23;    // 200 Hz .. 5 kHz: reference level for both curves
-    // "trop de ..." / "manque de ..." (with elision for the vowels)
-    const char* regionNames[] = { "de sub (30-60 Hz)", "de basses (80-160 Hz)", "de bas-m\xc3\xa9""dium (200-500 Hz)", "de m\xc3\xa9""dium (630 Hz-1,6 kHz)",
-                                  "de pr\xc3\xa9sence (2-5 kHz)", "d'aigus (6-10 kHz)", "d'air (12-16 kHz)" };
+    // "Too much ..." / "Not enough ..."
+    const char* regionNames[] = { "sub (30-60 Hz)", "bass (80-160 Hz)", "low-mids (200-500 Hz)", "mids (630 Hz-1.6 kHz)",
+                                  "presence (2-5 kHz)", "highs (6-10 kHz)", "air (12-16 kHz)" };
     constexpr int regionLo[] = { 1, 5, 9, 14, 19, 24, 27 }, regionHi[] = { 4, 8, 13, 18, 23, 26, 28 };
 
     // clear excess under 40 Hz, in bands where there is real energy
@@ -202,11 +202,11 @@ namespace
     }
     juce::String hzName (float hz)
     {
-        return hz >= 1000.0f ? juce::String (hz / 1000.0f, 1).replaceCharacter ('.', ',') + " kHz" : juce::String (juce::roundToInt (hz)) + " Hz";
+        return hz >= 1000.0f ? juce::String (hz / 1000.0f, 1) + " kHz" : juce::String (juce::roundToInt (hz)) + " Hz";
     }
     juce::String toolName (int k, const ModuleBase& b)
     {
-        if (k == 0) return "basses 110 Hz";
+        if (k == 0) return "low 110 Hz";
         if (k == 5) return "air 10 kHz";
         return "SPECTRAL " + hzName (b.specFreq[k - 1]);
     }
@@ -486,22 +486,22 @@ AutoResult AutoMaster::compute (const AudioFeatures& f, int styleParam, double b
     const bool hard = r.style == styleDnb || r.style == styleHardTechno;
     auto& b = r.base;
 
-    r.report.add (fr ("Style : ") + p.name + (r.styleWasDetected ? fr (" (détecté") + (bpm > 0 ? ", " + juce::String (juce::roundToInt (r.style == styleLofi && bpm > 140.0 ? bpm / 2.0 : bpm)) + " BPM)" : juce::String (")")) : juce::String())
-                  + fr (" — comparé à ") + juce::String (n) + fr (" masters de référence") + (n < 5 ? fr (" (profil provisoire : corrections plus prudentes)") : juce::String()));
+    r.report.add (fr ("Style: ") + p.name + (r.styleWasDetected ? fr (" (detected") + (bpm > 0 ? ", " + juce::String (juce::roundToInt (r.style == styleLofi && bpm > 140.0 ? bpm / 2.0 : bpm)) + " BPM)" : juce::String (")")) : juce::String())
+                  + fr (" — compared with ") + juce::String (n) + fr (" reference masters") + (n < 5 ? fr (" (provisional profile: more cautious corrections)") : juce::String()));
     if (f.hasSpectrum)
-        r.report.add (fr ("Écoute : ") + juce::String (juce::roundToInt (f.durationSec)) + fr (" s, analyse sur les ") + juce::String (juce::roundToInt (f.loudSeconds))
-                      + fr (" s les plus forts (même méthode que les références)"));
+        r.report.add (fr ("Listened: ") + juce::String (juce::roundToInt (f.durationSec)) + fr (" s, analysed on the loudest ") + juce::String (juce::roundToInt (f.loudSeconds))
+                      + fr (" s (same method as the references)"));
     if (r.styleAlt > 0)
-        r.report.add (fr ("Style hésitant : très proche de ") + styleNames()[r.styleAlt] + fr (" — si c'est plutôt ce style, choisis-le dans STYLE et relance AUTO"));
+        r.report.add (fr ("Close call: very near ") + styleNames()[r.styleAlt] + fr (" — if it is rather that style, pick it in STYLE and run AUTO again"));
     if (f.hostStart >= 0.0 && f.hostEnd > f.hostStart)
     {
         auto mmss = [] (double t) { const int s = juce::jmax (0, (int) std::floor (t)); return juce::String (s / 60) + ":" + juce::String (s % 60).paddedLeft ('0', 2); };
-        r.report.add (fr ("Passage écouté : de ") + mmss (f.hostStart) + fr (" à ") + mmss (f.hostEnd) + fr (" dans le morceau"));
+        r.report.add (fr ("Section listened to: ") + mmss (f.hostStart) + fr (" to ") + mmss (f.hostEnd) + fr (" in the track"));
     }
     // A break inside the extract
     if (f.hasSpectrum && f.quietShare > 0.2f)
-        r.report.add (fr ("L'extrait contenait un passage calme (break, ") + juce::String (juce::roundToInt (100.0f * f.quietShare))
-                      + fr (" % du temps) : pour plus de précision, relance AUTO pendant un drop"));
+        r.report.add (fr ("The excerpt contained a quiet part (break, ") + juce::String (juce::roundToInt (100.0f * f.quietShare))
+                      + fr (" % of the time): for more accuracy, run AUTO again during a drop"));
 
     // ---- Tonal balance: curve vs references, fitted on the EQ tools
     if (f.hasSpectrum)
@@ -518,8 +518,8 @@ AutoResult AutoMaster::compute (const AudioFeatures& f, int styleParam, double b
             }
             dev /= std::max (1.0e-6f, w);
             if (excess > 0.3f && std::abs (dev) > 0.75f)
-                r.report.add ((dev > 0 ? fr ("Trop ") : fr ("Manque ")) + fr (regionNames[g]) + " : " + (dev > 0 ? "+" : "") + juce::String (dev, 1)
-                              + fr (" dB par rapport aux références"));
+                r.report.add ((dev > 0 ? fr ("Too much ") : fr ("Not enough ")) + fr (regionNames[g]) + ": " + (dev > 0 ? "+" : "") + juce::String (dev, 1)
+                              + fr (" dB vs the references"));
         }
         // Low-cut first (it removes rumble the EQ tools cannot reach without hurting the kick), then the EQ is fitted
         // on what remains.
@@ -530,8 +530,8 @@ AutoResult AutoMaster::compute (const AudioFeatures& f, int styleParam, double b
             float under = -100.0f;
             for (int i = 0; i <= 2; ++i) under = std::max (under, t.deviation[i]);
             for (int i = 0; i < nb; ++i) fc.thirdOctDb[i] += lowCutResponseDb (b.lowCut, profileThirdOctHz[i]);
-            r.report.add (fr ("Coupe-bas ") + juce::String (juce::roundToInt (b.lowCut)) + fr (" Hz (36 dB/oct) : excès de ") + dbs (under)
-                          + fr (" sous 40 Hz par rapport aux références, retiré avant la compression et le limiteur"));
+            r.report.add (fr ("Low cut ") + juce::String (juce::roundToInt (b.lowCut)) + fr (" Hz (36 dB/oct): excess of ") + dbs (under)
+                          + fr (" below 40 Hz vs the references, removed before the compression and the limiter"));
         }
         const auto tc = b.lowCut > 0.0f ? analyseTone (fc, p, n < 5 ? 0.7f : 0.9f) : t;
         BellHz bells = defaultBells();
@@ -549,13 +549,13 @@ AutoResult AutoMaster::compute (const AudioFeatures& f, int styleParam, double b
         if (b.lowCut < 1.0f && (b.toneLow > 2.0f || (b.specGain[0] > 1.5f && b.specFreq[0] < 70.0f)))
         {
             b.lowCut = 20.0f;   // a bass lift also lifts what is under the music: keep it out of the limiter
-            r.report.add (fr ("Coupe-bas de protection 20 Hz (les basses sont relevées, l'infra-grave ne doit pas l'être)"));
+            r.report.add (fr ("Protective 20 Hz low cut (the bass is raised, the infra-bass must not be)"));
         }
-        if (moves.isNotEmpty()) r.report.add (fr ("Égalisation : ") + moves);
-        else r.report.add (fr ("Équilibre tonal déjà dans les références : pas d'égalisation"));
+        if (moves.isNotEmpty()) r.report.add (fr ("EQ: ") + moves);
+        else r.report.add (fr ("Tonal balance already within the references: no EQ"));
         if (hasSubExcess (tc))
-            r.mixNotes.add (fr ("Énergie très excessive sous 40 Hz (") + dbs (std::max ({ t.deviation[0], t.deviation[1], t.deviation[2] }))
-                            + fr (" vs références) : le coupe-bas du master en retire l'essentiel ; pour un résultat encore plus propre, filtre la basse et le kick à la source dans le mix (vers 25-30 Hz)."));
+            r.mixNotes.add (fr ("Far too much energy below 40 Hz (") + dbs (std::max ({ t.deviation[0], t.deviation[1], t.deviation[2] }))
+                            + fr (" vs the references): the master's low cut removes most of it; for an even cleaner result, filter the bass and the kick at the source in the mix (around 25-30 Hz)."));
         // what mastering EQ cannot reasonably fix: tell where the mix should be reworked
         for (int gi = 0; gi < 7; ++gi)
         {
@@ -569,8 +569,8 @@ AutoResult AutoMaster::compute (const AudioFeatures& f, int styleParam, double b
             }
             dev /= std::max (1.0e-6f, w); res /= std::max (1.0e-6f, w);
             if (std::abs (res) > 3.0f && gi > 0)
-                r.mixNotes.add ((dev > 0 ? fr ("Trop ") : fr ("Manque ")) + fr (regionNames[gi]) + fr (" dans le mix (") + dbs (dev) + fr (") : le master en corrige ")
-                                + juce::String (std::abs (res - dev), 1) + fr (" dB sans abîmer le son, le reste est à reprendre dans le mix."));
+                r.mixNotes.add ((dev > 0 ? fr ("Too much ") : fr ("Not enough ")) + fr (regionNames[gi]) + fr (" in the mix (") + dbs (dev) + fr ("): the master corrects ")
+                                + juce::String (std::abs (res - dev), 1) + fr (" dB without harming the sound, the rest should be fixed in the mix."));
         }
         // dynamic bells: the corrected zones also get a level-dependent action (only the peaks are pushed further)
         b.specDyn[0] = lofi ? 0.0f : (b.specGain[0] < -1.0f ? 0.5f : 0.25f);
@@ -588,22 +588,22 @@ AutoResult AutoMaster::compute (const AudioFeatures& f, int styleParam, double b
         if (phase)
         {
             b.widthSide = -2.0f;
-            r.mixNotes.add (fr ("Problème de phase : le mix perd ") + juce::String (f.monoLossDb, 1) + fr (" dB en mono. À vérifier dans le mix (sons inversés, chorus/élargisseurs trop forts)."));
-            r.report.add (fr ("Phase fragile → côtés -2 dB pour protéger le mono"));
+            r.mixNotes.add (fr ("Phase problem: the mix loses ") + juce::String (f.monoLossDb, 1) + fr (" dB in mono. Check the mix (inverted sounds, chorus / wideners too strong)."));
+            r.report.add (fr ("Fragile phase → sides -2 dB to protect mono"));
         }
         else if (std::abs (d) > tol)
         {
             b.widthSide = juce::jlimit (-4.0f, 2.5f, -0.7f * (d - (d > 0 ? 0.5f * tol : -0.5f * tol)));
-            r.report.add ((d > 0 ? fr ("Image plus large") : fr ("Image plus étroite")) + fr (" que les références (côtés ") + (d > 0 ? "+" : "") + juce::String (d, 1)
-                          + fr (" dB) → côtés ") + dbs (b.widthSide));
+            r.report.add ((d > 0 ? fr ("Image wider") : fr ("Image narrower")) + fr (" than the references (sides ") + (d > 0 ? "+" : "") + juce::String (d, 1)
+                          + fr (" dB) → sides ") + dbs (b.widthSide));
         }
         if (! lofi)
         {
             b.widthMono = hard ? 160.0f : 140.0f;
             if (f.lowSideRatio > 0.01f)
-                r.report.add (fr ("Basses en stéréo (") + pct (f.lowSideRatio) + fr (") alors que les références sont mono → graves au centre sous ") + juce::String (juce::roundToInt (b.widthMono)) + " Hz");
+                r.report.add (fr ("Stereo low end (") + pct (f.lowSideRatio) + fr (") while the references are mono → low end centred below ") + juce::String (juce::roundToInt (b.widthMono)) + " Hz");
             else
-                r.report.add (fr ("Graves gardés au centre sous ") + juce::String (juce::roundToInt (b.widthMono)) + fr (" Hz (comme les références)"));
+                r.report.add (fr ("Low end kept in the centre below ") + juce::String (juce::roundToInt (b.widthMono)) + fr (" Hz (like the references)"));
         }
     }
 
@@ -628,8 +628,8 @@ AutoResult AutoMaster::compute (const AudioFeatures& f, int styleParam, double b
         if (crestIn < p.plr_drop.p25 - 2.0f && crestIn < 7.0f)
         {
             b.compGlue = 0.0f; b.compPunch = 0.0f; b.clipAmt = 0.1f;
-            r.mixNotes.add (fr ("Mix déjà très compressé (crête/volume ") + juce::String (crestIn, 1) + fr (" dB sur les passages forts) : plus de limiteur ne le rendra pas plus percutant. Allège la compression du bus dans le mix."));
-            r.report.add (fr ("Mix déjà compressé → pas de compression en plus, clipper léger"));
+            r.mixNotes.add (fr ("Mix already heavily compressed (peak-to-loudness ") + juce::String (crestIn, 1) + fr (" dB on the loud parts): more limiting will not make it punchier. Ease off the bus compression in the mix."));
+            r.report.add (fr ("Mix already compressed → no extra compression, light clipper"));
         }
         else
         {
@@ -645,19 +645,19 @@ AutoResult AutoMaster::compute (const AudioFeatures& f, int styleParam, double b
                 b.compGlue = reduce > 6.0f ? juce::jlimit (0.2f, 0.5f, 0.15f + 0.03f * reduce) : 0.2f;
                 b.compPunch = 0.1f;   // punch v2 is strong: AUTO stays neutral, the presets bring the character
             }
-            r.report.add (fr ("Dynamique : crêtes à ") + juce::String (crestIn, 1) + fr (" dB au-dessus du volume des passages forts ; pour ") + juce::String (r.loudPassageTarget, 1)
-                          + fr (" LUFS sous ") + juce::String (ceilingDb, 1) + fr (" dBTP il faut ") + juce::String (crestOut, 1) + fr (" dB → ") + juce::String (std::max (0.0f, reduce), 1)
-                          + fr (" dB à absorber : compression ") + pct (b.compGlue) + ", clipper " + pct (b.clipAmt) + fr (", le limiteur fait le reste"));
+            r.report.add (fr ("Dynamics: peaks ") + juce::String (crestIn, 1) + fr (" dB above the loudness of the loud parts; for ") + juce::String (r.loudPassageTarget, 1)
+                          + fr (" LUFS under ") + juce::String (ceilingDb, 1) + fr (" dBTP it takes ") + juce::String (crestOut, 1) + fr (" dB → ") + juce::String (std::max (0.0f, reduce), 1)
+                          + fr (" dB to absorb: compression ") + pct (b.compGlue) + ", clipper " + pct (b.clipAmt) + fr (", the limiter does the rest"));
         }
         b.satDrive = 0.0f;   // AUTO corrects and stays clean (measured: saturation pulls the low end away from the references);
                              // the colour (saturation, punch) is the presets' job, layered on top
     }
 
     if (targetIndex == styleTarget)
-        r.report.add (fr ("Volume : passages forts à ") + juce::String (r.loudPassageTarget, 1) + fr (" LUFS (médiane des références, ") + juce::String (p.lufs_i.median, 1)
-                      + fr (" LUFS intégré), plafond ") + juce::String (ceilingDb, 1) + " dBTP");
+        r.report.add (fr ("Loudness: loud parts at ") + juce::String (r.loudPassageTarget, 1) + fr (" LUFS (median of the references, ") + juce::String (p.lufs_i.median, 1)
+                      + fr (" LUFS integrated), ceiling ") + juce::String (ceilingDb, 1) + " dBTP");
     else if (targetIndex > 0 && targetIndex < sameLevelTarget)
-        r.report.add (fr ("Volume : cible ") + loudnessTargets[targetIndex].name + fr (" (choisie à la main)"));
+        r.report.add (fr ("Loudness: target ") + loudnessTargets[targetIndex].name + fr (" (chosen manually)"));
     return r;
 }
 // ============================================================================================ second pass (processed output)
@@ -683,7 +683,7 @@ void AutoMaster::refine (const AudioFeatures& outMeasured, float avgGr, AutoResu
         for (int i = 0; i < nb; ++i)
             adj.thirdOctDb[i] += lowCutResponseDb (newCut, profileThirdOctHz[i]) - lowCutResponseDb (b.lowCut, profileThirdOctHz[i]);
         auto hzText = [] (float v) { return v < 1.0f ? juce::String ("off") : juce::String (juce::roundToInt (v)) + " Hz"; };
-        cutMove = fr ("coupe-bas ") + hzText (b.lowCut) + fr (" → ") + hzText (newCut);
+        cutMove = fr ("low cut ") + hzText (b.lowCut) + fr (" → ") + hzText (newCut);
         b.lowCut = newCut;
     }
     const auto t = cutMove.isNotEmpty() ? analyseTone (adj, p, 0.75f) : t0;
@@ -703,11 +703,11 @@ void AutoMaster::refine (const AudioFeatures& outMeasured, float avgGr, AutoResu
     if (b.lowCut < 1.0f && (b.toneLow > 2.0f || (b.specGain[0] > 1.5f && b.specFreq[0] < 70.0f)))
     {
         b.lowCut = 20.0f;
-        moves << (moves.isEmpty() ? "" : ", ") << fr ("coupe-bas de protection 20 Hz");
+        moves << (moves.isEmpty() ? "" : ", ") << fr ("protective 20 Hz low cut");
     }
-    r.report.add (fr ("Vérification sur le son traité : écart tonal ") + juce::String (t0.error, 1) + " dB"
-                  + (moves.isNotEmpty() ? fr (", ajusté : ") + moves
-                                        : (t.error > 0.8f ? fr (", correction déjà au maximum autorisé (le reste est à traiter dans le mix)") : fr (", rien à reprendre"))));
+    r.report.add (fr ("Check on the processed sound: tonal distance ") + juce::String (t0.error, 1) + " dB"
+                  + (moves.isNotEmpty() ? fr (", adjusted: ") + moves
+                                        : (t.error > 0.8f ? fr (", correction already at the allowed maximum (the rest belongs in the mix)") : fr (", nothing to adjust"))));
 
     // Dynamics: the limiter should not be doing all the work (it would pump and flatten the kick)
     const float crestOut = out.truePeakDb - out.loudLufs;
@@ -715,16 +715,16 @@ void AutoMaster::refine (const AudioFeatures& outMeasured, float avgGr, AutoResu
     {
         b.clipAmt = std::min (0.85f, b.clipAmt + 0.15f);
         b.compGlue = std::min (0.55f, b.compGlue + 0.05f);
-        r.report.add (fr ("Le limiteur travaillait trop (") + juce::String (avgGr, 1) + fr (" dB) → clipper ") + pct (b.clipAmt) + ", compression " + pct (b.compGlue));
+        r.report.add (fr ("The limiter was working too hard (") + juce::String (avgGr, 1) + fr (" dB) → clipper ") + pct (b.clipAmt) + ", compression " + pct (b.compGlue));
         if (avgGr > 7.0f)
         {
             r.loudPassageTarget -= 1.0f;
-            r.report.add (fr ("Cible baissée de 1 dB pour garder le punch (") + juce::String (r.loudPassageTarget, 1) + " LUFS)");
+            r.report.add (fr ("Target lowered by 1 dB to keep the punch (") + juce::String (r.loudPassageTarget, 1) + " LUFS)");
         }
     }
     else
-        r.report.add (fr ("Dynamique après traitement : limiteur ") + juce::String (avgGr, 1) + fr (" dB en moyenne, crêtes à ") + juce::String (crestOut, 1)
-                      + fr (" dB au-dessus du volume (références : ") + juce::String (p.plr_drop.median, 1) + fr (" dB, mais elles dépassent souvent 0 dBTP)"));
+        r.report.add (fr ("Dynamics after processing: limiter ") + juce::String (avgGr, 1) + fr (" dB on average, peaks ") + juce::String (crestOut, 1)
+                      + fr (" dB above the loudness (references: ") + juce::String (p.plr_drop.median, 1) + fr (" dB, but they often go over 0 dBTP)"));
 }
 
 void AutoMaster::finalCheck (const AudioFeatures& outMeasured, AutoResult& r, const float* characterCurve)
@@ -736,8 +736,8 @@ void AutoMaster::finalCheck (const AudioFeatures& outMeasured, AutoResult& r, co
     const auto& p = profile (r.style);
     const auto t = analyseTone (out, p, 1.0f);
     r.toneErrorAfter = t.error;
-    r.report.add (fr ("Résultat : écart tonal aux références ") + juce::String (r.toneErrorBefore, 1) + fr (" dB avant → ") + juce::String (t.error, 1)
-                  + fr (" dB après ; passages forts à ") + juce::String (out.loudLufs, 1) + " LUFS, true peak " + juce::String (out.truePeakDb, 1) + " dBTP");
+    r.report.add (fr ("Result: tonal distance to the references ") + juce::String (r.toneErrorBefore, 1) + fr (" dB before → ") + juce::String (t.error, 1)
+                  + fr (" dB after; loud parts at ") + juce::String (out.loudLufs, 1) + " LUFS, true peak " + juce::String (out.truePeakDb, 1) + " dBTP");
 }
 
 // ============================================================================================ preset layering

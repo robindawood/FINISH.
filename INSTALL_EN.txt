@@ -1,0 +1,42 @@
+WHALE — Mastering
+=================
+
+INSTALLATION
+------------
+macOS   : double-click WHALE-x.y.z-macOS.pkg (VST3 + AU).
+          If macOS blocks the installer: right-click > Open, or System Settings > Privacy & Security > Open Anyway.
+Windows : run WHALE-x.y.z-Windows-Setup.exe (VST3 in C:\Program Files\Common Files\VST3).
+
+Then rescan your plug-ins:
+  - Ableton Live : Settings > Plug-Ins > Rescan.
+  - FL Studio    : Options > Manage plugins > Find more plugins.
+  - Logic Pro    : the AU version is picked up on the next launch.
+
+QUICK START
+-----------
+1. Put WHALE LAST on the master bus.
+2. Play the loudest part of the track (drop / chorus).
+3. Click AUTO and let it play: WHALE listens for 30 seconds (it keeps the loudest parts), sets the chain,
+   then measures the processed sound for about 30 seconds and fine-tunes what is left.
+   The report shows the section it listened to (e.g. "1:02 to 1:32") and warns you if it contained a break:
+   then run AUTO again during a drop. If the style was a close call, the caption shows "(close to …)":
+   pick the right style in STYLE and run AUTO again.
+4. Compare with BEFORE / AFTER (matched loudness on the loud parts: you hear the real difference, not just "louder").
+   The meters on the right show what you hear: TRUE PEAK, TONE (distance to the style's references),
+   DYNAMICS (green = not squashed for your target), STEREO, MONO BASS.
+   Not convinced? "↶ UNDO AUTO" (top left, or menu ≡) brings back exactly the settings you had before.
+5. Adjust with the 8 knobs (0 = AUTO's choice), or pick a preset.
+6. EXPERT: detailed settings for every module + AUTO REPORT (what was done, and why).
+
+The whale rises to the surface (the loudness target) while mastering, doubles up if there is a phase problem,
+turns orange when it is too loud, and blows stars when the master is validated.
+Menu ≡ > Reduced animations for slower computers.
+
+LICENSE
+-------
+WHALE is fully usable for 7 days (the "TRIAL" counter at the top left). After that, paste the license key you
+received by e-mail after your purchase: click "TRIAL" / "ACTIVATE", or menu ≡ > License. An internet connection
+is needed only once, for activation. One key works on 5 computers.
+Without a license after the trial, WHALE mutes the sound for 2 seconds every 40 seconds.
+
+Support: mr.winkbeats@gmail.com

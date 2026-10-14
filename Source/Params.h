@@ -54,7 +54,7 @@ namespace PID
 // Styles: index 0 lets AUTO detect the style. The others match the reference profiles (Resources/Profiles).
 inline const juce::StringArray& styleNames()
 {
-    static const juce::StringArray n { juce::String (juce::CharPointer_UTF8 ("Auto (d\xc3\xa9tection)")), "Tech House / House", "Afro / Latin House",
+    static const juce::StringArray n { juce::String (juce::CharPointer_UTF8 ("Auto (detect)")), "Tech House / House", "Afro / Latin House",
                                        "Hard Techno / Rave", "Drum & Bass", "UK Garage / Bass", "Lo-fi / Chill", "Afro Tech / Riddim", "Afro / Dancehall" };
     return n;
 }

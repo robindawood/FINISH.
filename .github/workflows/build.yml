@@ -14,7 +14,7 @@ on:
   workflow_dispatch:
 
 env:
-  VERSION: 1.1.0-beta2
+  VERSION: 1.1.0-beta3
 
 jobs:
   build:
@@ -115,7 +115,7 @@ jobs:
                    --identifier com.whaleaudio.whale.au --version "$VERSION" pkg/WHALE-AU.pkg
           productbuild --package pkg/WHALE-VST3.pkg --package pkg/WHALE-AU.pkg "dist/WHALE-$VERSION-macOS.pkg"
           mkdir zipdir
-          cp -R build/WHALE_artefacts/Release/VST3/WHALE.vst3 build/WHALE_artefacts/Release/AU/WHALE.component INSTALL_FR.txt NOTES_BETA_FR.txt zipdir/
+          cp -R build/WHALE_artefacts/Release/VST3/WHALE.vst3 build/WHALE_artefacts/Release/AU/WHALE.component INSTALL_EN.txt INSTALL_FR.txt NOTES_BETA_FR.txt zipdir/
           (cd zipdir && zip -qry "../dist/WHALE-$VERSION-macOS-VST3-AU.zip" .)
 
       # ---------------- Windows installer (.exe) ----------------
@@ -130,7 +130,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit 1 }
           New-Item -ItemType Directory -Force -Path zipdir | Out-Null
           Copy-Item -Recurse build/WHALE_artefacts/Release/VST3/WHALE.vst3 zipdir/
-          Copy-Item INSTALL_FR.txt, NOTES_BETA_FR.txt zipdir/
+          Copy-Item INSTALL_EN.txt, INSTALL_FR.txt, NOTES_BETA_FR.txt zipdir/
           Compress-Archive -Path zipdir/* -DestinationPath "dist/WHALE-$env:VERSION-Windows-VST3.zip"
 
       - uses: actions/upload-artifact@v4

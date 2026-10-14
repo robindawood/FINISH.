@@ -228,7 +228,7 @@ void AutoButton::paint (juce::Graphics& g)
 
 const juce::StringArray& ChainStrip::names()
 {
-    static const juce::StringArray n { "SPECTRAL", "COMPRESSION", "SATURATION", "LARGEUR", "BASSES / AIR", "CLIPPER", "LIMITEUR" };
+    static const juce::StringArray n { "SPECTRAL", "COMPRESSION", "SATURATION", "WIDTH", "LOW / AIR", "CLIPPER", "LIMITER" };
     return n;
 }
 
@@ -246,7 +246,7 @@ void ChainStrip::paint (juce::Graphics& g)
     const char* ids[7] = { PID::specOn, PID::compOn, PID::satOn, PID::widthOn, PID::toneOn, PID::clipOn, nullptr };
     g.setColour (dim);
     g.setFont (mono (11.0f, 0.08f));
-    g.drawText (fr ("CHAÎNE"), 0, 0, 64, getHeight(), juce::Justification::centredLeft);
+    g.drawText (fr ("CHAIN"), 0, 0, 64, getHeight(), juce::Justification::centredLeft);
     for (int i = 0; i < 7; ++i)
     {
         const auto r = chipBounds (i);
@@ -397,9 +397,9 @@ void ABSwitch::paint (juce::Graphics& g)
     g.fillRoundedRectangle (sel, 6.0f);
     g.setFont (bold (13.5f, 0.05f));
     g.setColour (bypass ? text : dim);
-    g.drawText ("SANS", r.withWidth (r.getWidth() * 0.5f), juce::Justification::centred);
+    g.drawText ("BEFORE", r.withWidth (r.getWidth() * 0.5f), juce::Justification::centred);
     g.setColour (bypass ? dim : text);
-    g.drawText ("AVEC", r.withTrimmedLeft (r.getWidth() * 0.5f), juce::Justification::centred);
+    g.drawText ("AFTER", r.withTrimmedLeft (r.getWidth() * 0.5f), juce::Justification::centred);
 }
 
 void ABSwitch::mouseUp (const juce::MouseEvent& e)

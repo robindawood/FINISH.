@@ -316,14 +316,14 @@ juce::String WhaleAudioProcessor::getVerdictText() const
 {
     switch (verdict)
     {
-        case Verdict::idle:      return fr ("EN ATTENTE DU SON");
-        case Verdict::ok:        return fr ("PRÊT");
-        case Verdict::working:   return autoState == AutoState::listening ? (waitingForAudio ? fr ("LANCE LA LECTURE (LE DROP)") : fr ("ÉCOUTE EN COURS")) : fr ("MASTERING EN COURS");
-        case Verdict::validated: return fr ("MASTER VALIDÉ");
-        case Verdict::tooLoud:   return fr ("TROP FORT");
-        case Verdict::tooSoft:   return fr ("SOUS LA CIBLE");
-        case Verdict::clipping:  return fr ("SATURE");
-        case Verdict::phase:     return fr ("PROBLÈME DE PHASE");
+        case Verdict::idle:      return fr ("WAITING FOR AUDIO");
+        case Verdict::ok:        return fr ("READY");
+        case Verdict::working:   return autoState == AutoState::listening ? (waitingForAudio ? fr ("PLAY THE TRACK (THE DROP)") : fr ("LISTENING")) : fr ("MASTERING");
+        case Verdict::validated: return fr ("MASTER VALIDATED");
+        case Verdict::tooLoud:   return fr ("TOO LOUD");
+        case Verdict::tooSoft:   return fr ("BELOW TARGET");
+        case Verdict::clipping:  return fr ("CLIPPING");
+        case Verdict::phase:     return fr ("PHASE PROBLEM");
     }
     return {};
 }

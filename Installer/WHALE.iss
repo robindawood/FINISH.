@@ -1,6 +1,6 @@
 ; Windows installer for WHALE (Inno Setup 6). Built by .github/workflows/build.yml.
 #ifndef AppVersion
-  #define AppVersion "1.1.0-beta2"
+  #define AppVersion "1.1.0-beta3"
 #endif
 
 [Setup]
@@ -26,4 +26,4 @@ WizardStyle=modern
 Source: "..\build\WHALE_artefacts\Release\VST3\WHALE.vst3\*"; DestDir: "{commoncf64}\VST3\WHALE.vst3"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Messages]
-FinishedLabel=WHALE est installé dans C:\Program Files\Common Files\VST3.%n%nFL Studio : Options > Manage plugins > Find more plugins.%nAbleton Live : Préférences > Plug-ins > Rescan.%nMets WHALE en dernier sur le bus Master.
+FinishedLabel=WHALE is installed in C:\Program Files\Common Files\VST3.%n%nFL Studio: Options > Manage plugins > Find more plugins.%nAbleton Live: Settings > Plug-Ins > Rescan.%nPut WHALE last on the master bus.

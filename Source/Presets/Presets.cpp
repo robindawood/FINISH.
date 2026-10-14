@@ -17,65 +17,65 @@ namespace
     //   of the style's reference spread (+1 = towards the upper quartile of your references, -1 = lower quartile),
     // spectral dynamics (sub, low-mid, presence, highs), punch, saturation, glue, clipper, sides dB, detail, mono Hz
     const Def defs[] = {
-        { "Club Punch", "Kick devant, aigus brillants, limiteur ferme", styleTechHouse, styleTarget, -1.0f,
+        { "Club Punch", "Kick forward, bright highs, firm limiting", styleTechHouse, styleTarget, -1.0f,
           { 0.0f, 1.0f, 0.0f, 0.0f, 1.0f, 0.5f, 0.0f }, { 0.3f, 0.3f, 0.4f, 0.3f }, 0.6f, 0.1f, 0.15f, 0.6f, 0.0f, 0.45f, 140.0f },
-        { "Groove Propre", "Transparent, garde le groove et la dynamique", styleTechHouse, styleTarget, -1.0f,
+        { "Clean Groove", "Transparent, keeps the groove and the dynamics", styleTechHouse, styleTarget, -1.0f,
           { 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.5f }, { 0.2f, 0.2f, 0.3f, 0.2f }, 0.2f, 0.0f, 0.1f, 0.2f, 0.0f, 0.6f, 130.0f },
-        { "Rolling Bass", "Basse ronde et sub tenu, haut du spectre doux", styleTechHouse, styleTarget, -1.0f,
+        { "Rolling Bass", "Round bass and steady sub, smooth top end", styleTechHouse, styleTarget, -1.0f,
           { 1.0f, 1.5f, 0.0f, 0.0f, 0.0f, -0.5f, 0.0f }, { 0.4f, 0.3f, 0.4f, 0.3f }, 0.15f, 0.3f, 0.45f, 0.4f, 0.0f, 0.5f, 150.0f },
-        { "Peak Time", "Le plus fort pour le club sans casser le kick", styleTechHouse, 4, -0.5f,
+        { "Peak Time", "Loudest for the club without breaking the kick", styleTechHouse, 4, -0.5f,
           { 0.0f, 0.0f, 0.0f, 0.0f, 0.5f, 1.0f, 1.0f }, { 0.4f, 0.4f, 0.5f, 0.4f }, 0.2f, 0.25f, 0.55f, 0.75f, 0.0f, 0.4f, 150.0f },
-        { "Deep & Warm", "Chaleur analogique, aigus arrondis, large", styleTechHouse, styleTarget, -1.0f,
+        { "Deep & Warm", "Analog warmth, rounded highs, wide", styleTechHouse, styleTarget, -1.0f,
           { 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, -1.0f, -1.0f }, { 0.2f, 0.2f, 0.5f, 0.4f }, 0.05f, 0.5f, 0.35f, 0.3f, 1.0f, 0.55f, 130.0f },
-        { "Afro Organic", "Percussions naturelles, dynamique ouverte", styleAfro, styleTarget, -1.0f,
+        { "Afro Organic", "Natural percussion, open dynamics", styleAfro, styleTarget, -1.0f,
           { 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f }, { 0.2f, 0.2f, 0.4f, 0.3f }, 0.15f, 0.1f, 0.1f, 0.15f, 0.5f, 0.65f, 130.0f },
-        { "Latin Groove", "Congas et voix devant, basse chaude", styleAfro, styleTarget, -1.0f,
+        { "Latin Groove", "Congas and vocals forward, warm bass", styleAfro, styleTarget, -1.0f,
           { 0.0f, 0.5f, 0.0f, 0.0f, 1.0f, 0.5f, 0.0f }, { 0.2f, 0.2f, 0.4f, 0.3f }, 0.5f, 0.15f, 0.2f, 0.5f, 0.3f, 0.55f, 130.0f },
-        { "Sunset Edit", "Doux et large pour les edits et les voix", styleAfro, styleTarget, -1.0f,
+        { "Sunset Edit", "Smooth and wide for edits and vocals", styleAfro, styleTarget, -1.0f,
           { 0.0f, 0.0f, 1.0f, 0.0f, -1.0f, 0.0f, -1.0f }, { 0.3f, 0.2f, 0.5f, 0.4f }, 0.05f, 0.4f, 0.25f, 0.2f, 1.0f, 0.6f, 120.0f },
-        { "Afro Tech", "Plus serré et plus fort, pour les peak times", styleAfroTech, 3, -1.0f,
+        { "Afro Tech", "Tighter and louder, for peak time", styleAfroTech, 3, -1.0f,
           { 1.0f, -1.0f, 0.0f, 0.0f, 0.0f, 0.5f, 0.0f }, { 0.4f, 0.3f, 0.4f, 0.3f }, 0.35f, 0.15f, 0.5f, 0.6f, 0.0f, 0.45f, 140.0f },
-        { "Rave Hammer", "Kick dur et compact, très fort", styleHardTechno, styleTarget, -0.5f,
+        { "Rave Hammer", "Hard, compact kick, very loud", styleHardTechno, styleTarget, -0.5f,
           { 0.0f, 1.0f, -1.0f, 0.0f, 0.5f, 0.0f, 0.0f }, { 0.4f, 0.4f, 0.5f, 0.4f }, 0.25f, 0.4f, 0.55f, 0.8f, 0.0f, 0.35f, 160.0f },
-        { "Hard Groove", "Rapide et percussif, garde le rebond", styleHardTechno, styleTarget, -1.0f,
+        { "Hard Groove", "Fast and percussive, keeps the bounce", styleHardTechno, styleTarget, -1.0f,
           { 0.0f, 1.0f, 0.0f, -0.5f, 0.0f, 1.0f, 0.0f }, { 0.3f, 0.3f, 0.4f, 0.3f }, 0.6f, 0.2f, 0.15f, 0.6f, 0.0f, 0.45f, 160.0f },
-        { "Industrial", "Saturé et sombre, aigus contenus", styleHardTechno, styleTarget, -0.5f,
+        { "Industrial", "Saturated and dark, highs held back", styleHardTechno, styleTarget, -0.5f,
           { 0.0f, 0.0f, 0.5f, 0.5f, 0.0f, -1.0f, -1.0f }, { 0.4f, 0.3f, 0.6f, 0.5f }, 0.15f, 0.75f, 0.5f, 0.7f, -0.5f, 0.4f, 170.0f },
-        { "Schranz Edge", "Médiums mordants, kick devant", styleHardTechno, styleTarget, -0.5f,
+        { "Schranz Edge", "Biting mids, kick forward", styleHardTechno, styleTarget, -0.5f,
           { 0.0f, 0.0f, 0.0f, 1.0f, 1.0f, 0.0f, 0.0f }, { 0.4f, 0.4f, 0.6f, 0.4f }, 0.4f, 0.45f, 0.35f, 0.75f, 0.0f, 0.35f, 160.0f },
-        { "DnB Impact", "Très fort, sub contrôlé, caisse claire devant", styleDnb, styleTarget, -0.5f,
+        { "DnB Impact", "Very loud, controlled sub, snare forward", styleDnb, styleTarget, -0.5f,
           { -0.5f, 0.0f, 0.0f, 0.0f, 1.5f, 0.0f, 0.5f }, { 0.6f, 0.3f, 0.5f, 0.4f }, 0.6f, 0.2f, 0.2f, 0.7f, 0.0f, 0.4f, 160.0f },
-        { "Liquid", "Doux et large, dynamique préservée", styleDnb, 3, -1.0f,
+        { "Liquid", "Smooth and wide, dynamics preserved", styleDnb, 3, -1.0f,
           { 0.0f, 0.0f, -0.5f, 0.0f, 0.0f, 0.0f, 1.0f }, { 0.4f, 0.2f, 0.4f, 0.3f }, 0.15f, 0.1f, 0.1f, 0.2f, 0.8f, 0.6f, 140.0f },
-        { "Neuro Pressure", "Basses agressives tenues, transitoires vives", styleDnb, styleTarget, -0.5f,
+        { "Neuro Pressure", "Aggressive bass held in, sharp transients", styleDnb, styleTarget, -0.5f,
           { 0.0f, 0.0f, 1.0f, 1.0f, 0.0f, 0.0f, -0.5f }, { 0.6f, 0.4f, 0.6f, 0.4f }, 0.2f, 0.5f, 0.6f, 0.8f, 0.0f, 0.35f, 170.0f },
-        { "Jump Up", "Gros sub, wobble devant, très fort", styleDnb, styleTarget, -0.5f,
+        { "Jump Up", "Big sub, wobble forward, very loud", styleDnb, styleTarget, -0.5f,
           { 1.5f, 0.0f, 0.0f, 0.0f, 0.5f, 0.0f, 0.0f }, { 0.6f, 0.3f, 0.5f, 0.3f }, 0.45f, 0.3f, 0.4f, 0.75f, 0.0f, 0.4f, 170.0f },
-        { "2-Step Shuffle", "Swing préservé, basse chaude", styleUkg, styleTarget, -1.0f,
+        { "2-Step Shuffle", "Swing preserved, warm bass", styleUkg, styleTarget, -1.0f,
           { 0.0f, 0.0f, -0.5f, 0.0f, 1.0f, 0.0f, 1.0f }, { 0.3f, 0.3f, 0.4f, 0.3f }, 0.55f, 0.15f, 0.15f, 0.5f, 0.3f, 0.55f, 140.0f },
-        { "Speed Garage", "Basse qui pousse, kick serré", styleUkg, styleTarget, -1.0f,
+        { "Speed Garage", "Driving bass, tight kick", styleUkg, styleTarget, -1.0f,
           { 0.0f, 1.5f, -0.5f, 0.0f, 0.0f, 0.0f, 0.0f }, { 0.4f, 0.3f, 0.4f, 0.3f }, 0.4f, 0.3f, 0.4f, 0.55f, 0.0f, 0.45f, 150.0f },
-        { "Bass House", "Médiums de basse mordants, très club", styleUkg, 3, -0.5f,
+        { "Bass House", "Biting bass mids, club-ready", styleUkg, 3, -0.5f,
           { 0.0f, 0.0f, 0.0f, 1.0f, 0.5f, 0.0f, 0.0f }, { 0.5f, 0.3f, 0.5f, 0.3f }, 0.2f, 0.45f, 0.55f, 0.7f, 0.0f, 0.4f, 150.0f },
-        { "Lo-fi Doux", "Feutré, aucun écrasement, garde le souffle", styleLofi, styleTarget, -1.0f,
+        { "Soft Lo-fi", "Muted, no squashing, keeps the hiss", styleLofi, styleTarget, -1.0f,
           { 0.0f, 0.0f, 0.0f, 0.5f, 0.0f, -0.5f, 0.0f }, { 0.0f, 0.2f, 0.4f, 0.4f }, 0.0f, 0.2f, 0.1f, 0.0f, 0.0f, 0.75f, 0.0f },
-        { "Tape Warmth", "Saturation cassette, bas arrondis", styleLofi, styleTarget, -1.0f,
+        { "Tape Warmth", "Tape saturation, rounded lows", styleLofi, styleTarget, -1.0f,
           { 0.0f, 0.0f, 1.5f, 0.0f, 0.0f, -1.0f, -1.5f }, { 0.0f, 0.2f, 0.4f, 0.5f }, 0.0f, 0.65f, 0.25f, 0.0f, 0.5f, 0.7f, 0.0f },
-        { "Chill Streaming", "Pensé pour Spotify / Apple Music", styleLofi, 1, -1.0f,
+        { "Chill Streaming", "Made for Spotify / Apple Music", styleLofi, 1, -1.0f,
           { 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.5f }, { 0.0f, 0.2f, 0.4f, 0.3f }, 0.05f, 0.15f, 0.2f, 0.05f, 0.0f, 0.65f, 0.0f },
-        { "Streaming Propre", "-14 LUFS, transparent, pour toutes les plateformes", styleTechHouse, 1, -1.0f,
+        { "Clean Streaming", "-14 LUFS, transparent, for every platform", styleTechHouse, 1, -1.0f,
           { 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f }, { 0.2f, 0.2f, 0.3f, 0.2f }, 0.1f, 0.05f, 0.2f, 0.15f, 0.0f, 0.6f, 120.0f },
-        { "Demo Rapide", "Juste fort et propre pour envoyer une démo", styleTechHouse, 3, -1.0f,
+        { "Quick Demo", "Just loud and clean to send a demo", styleTechHouse, 3, -1.0f,
           { 0.0f, 0.5f, 0.0f, 0.0f, 0.5f, 0.0f, 0.0f }, { 0.3f, 0.3f, 0.3f, 0.3f }, 0.25f, 0.15f, 0.45f, 0.5f, 0.0f, 0.5f, 140.0f },
-        { "Riddim Pressure", "Sub tenu, kick serré, bas-médium allégé, fort", styleAfroTech, styleTarget, -1.0f,
+        { "Riddim Pressure", "Steady sub, tight kick, lighter low-mids, loud", styleAfroTech, styleTarget, -1.0f,
           { 1.5f, 0.0f, -1.0f, 0.0f, 0.0f, 0.5f, 0.0f }, { 0.4f, 0.3f, 0.4f, 0.3f }, 0.6f, 0.2f, 0.15f, 0.6f, 0.0f, 0.45f, 150.0f },
-        { "Afro Tech Percu", "Percussions vives et aérées, groove ouvert", styleAfroTech, styleTarget, -1.0f,
+        { "Afro Tech Percu", "Lively, airy percussion, open groove", styleAfroTech, styleTarget, -1.0f,
           { 0.0f, 0.0f, -1.0f, 0.0f, 1.0f, 0.0f, 1.5f }, { 0.3f, 0.3f, 0.5f, 0.4f }, 0.55f, 0.1f, 0.15f, 0.5f, 0.5f, 0.55f, 140.0f },
-        { "Dancehall Edit", "Sub qui tient, voix devant, kick sec", styleDancehall, styleTarget, -1.0f,
+        { "Dancehall Edit", "Solid sub, vocals forward, dry kick", styleDancehall, styleTarget, -1.0f,
           { 1.0f, 0.0f, 0.0f, 0.5f, 0.0f, 0.0f, 0.0f }, { 0.4f, 0.3f, 0.4f, 0.3f }, 0.55f, 0.15f, 0.15f, 0.55f, 0.0f, 0.45f, 150.0f },
-        { "Bashment Club", "Le plus fort pour le club, basses denses", styleDancehall, 3, -0.5f,
+        { "Bashment Club", "Loudest for the club, dense low end", styleDancehall, 3, -0.5f,
           { 1.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f }, { 0.5f, 0.3f, 0.5f, 0.3f }, 0.2f, 0.35f, 0.55f, 0.75f, 0.0f, 0.4f, 160.0f },
-        { "Afrobeats Smooth", "Chaleureux, voix soyeuses, dynamique respirée", styleDancehall, styleTarget, -1.0f,
+        { "Afrobeats Smooth", "Warm, silky vocals, breathing dynamics", styleDancehall, styleTarget, -1.0f,
           { 0.0f, 0.0f, 0.5f, 0.0f, 0.0f, -0.5f, 0.5f }, { 0.3f, 0.2f, 0.5f, 0.3f }, 0.1f, 0.35f, 0.3f, 0.25f, 0.5f, 0.6f, 140.0f },
     };
 }
@@ -84,7 +84,7 @@ namespace
 {
     // regions of the 29 1/3-octave bands used by the colour recipes
     constexpr int regLo[7] = { 0, 4, 8, 13, 19, 24, 27 }, regHi[7] = { 3, 7, 12, 18, 23, 26, 28 };
-    const char* regName[7] = { "sub", "basses", "bas-m\xc3\xa9""dium", "m\xc3\xa9""dium", "pr\xc3\xa9sence", "aigus", "air" };
+    const char* regName[7] = { "sub", "bass", "low-mids", "mids", "presence", "highs", "air" };
 
     // Colour curve of a recipe, built from the style's reference spread: +1 in a region moves it the way the upper
     // quarter of your references sits above their median (at least 2 dB, at most 4 dB, so it is always audible
@@ -116,11 +116,11 @@ namespace
         juce::StringArray t;
         for (int r = 0; r < 7; ++r)
             if (std::abs (recipe[r]) >= 0.5f) t.add (fr (recipe[r] > 0 ? "+ " : "\xe2\x88\x92 ") + fr (regName[r]));
-        if (punch >= 0.4f) t.add ("punch fort"); else if (punch >= 0.25f) t.add ("punch");
-        if (sat >= 0.5f) t.add (fr ("satur\xc3\xa9")); else if (sat >= 0.25f) t.add ("chaleur");
+        if (punch >= 0.4f) t.add ("strong punch"); else if (punch >= 0.25f) t.add ("punch");
+        if (sat >= 0.5f) t.add ("saturated"); else if (sat >= 0.25f) t.add ("warm");
         if (glue + clip >= 1.1f) t.add ("dense");
-        else if (glue + clip <= 0.45f) t.add ("dynamique");
-        if (side >= 0.8f) t.add ("large");
+        else if (glue + clip <= 0.45f) t.add ("dynamic");
+        if (side >= 0.8f) t.add ("wide");
         return t.joinIntoString (fr (" \xc2\xb7 "));
     }
 }
