@@ -574,6 +574,53 @@ namespace
         std::cout << "  wrote " << file.getFullPathName() << "\n";
     }
 
+    // Marketing screenshots at 2x: a finished AUTO on a real song (full UI, report, expert, presets)
+    void runPromo (const juce::File& dir, const juce::String& wav)
+    {
+        dir.createDirectory();
+        WhaleAudioProcessor p;
+        p.prepareToPlay (sr, block);
+        std::unique_ptr<WhaleEditor> ed (dynamic_cast<WhaleEditor*> (p.createEditor()));
+        FileSource src;
+        if (! src.load (juce::File (wav), 60.0)) { std::cout << "cannot read " << wav << "\n"; ++failures; return; }
+        juce::AudioBuffer<float> buf (2, block);
+        juce::MidiBuffer midi;
+        double acc = 0;
+        auto play = [&] (double seconds)
+        {
+            for (int k = 0; k < (int) (seconds * sr / block); ++k)
+            {
+                src.reader->read (&buf, 0, block, src.pos, true, true); src.pos += block;
+                if (src.pos > src.reader->lengthInSamples - block) src.pos = (juce::int64) (src.reader->lengthInSamples / 4);
+                buf.applyGain (juce::Decibels::decibelsToGain (-6.0f));
+                p.processBlock (buf, midi);
+                acc += block / sr;
+                if (acc >= 1.0 / 60.0) { acc = 0; TestAccess::pump (p); TestAccess::tickEditor (*ed); }
+            }
+        };
+        auto shot = [&] (juce::Component& c, const char* name)
+        {
+            auto img = c.createComponentSnapshot (c.getLocalBounds(), true, 2.0f);
+            juce::PNGImageFormat png; auto f = dir.getChildFile (name); f.deleteFile();
+            juce::FileOutputStream os (f); png.writeImageToStream (img, os);
+            std::cout << "  wrote " << f.getFullPathName() << "\n";
+        };
+        play (4.0);
+        p.toggleAuto();
+        for (int i = 0; i < 240 && p.getAutoState() != WhaleAudioProcessor::AutoState::done; ++i) play (1.0);
+        play (12.0);
+        shot (TestAccess::content (*ed), "promo_main.png");
+        TestAccess::openExpert (*ed, 7); play (0.5);
+        shot (TestAccess::content (*ed), "promo_report.png");
+        TestAccess::openExpert (*ed, 0); play (1.0);
+        shot (TestAccess::content (*ed), "promo_expert.png");
+        TestAccess::openExpert (*ed, -1);
+        TestAccess::showBrowser (*ed); play (0.5);
+        shot (TestAccess::browser (*ed), "promo_presets.png");
+        TestAccess::hideBrowser (*ed);
+        play (1.0);
+    }
+
     void runSnapshots (const juce::File& dir, const juce::String& wav)
     {
         dir.createDirectory();
@@ -875,6 +922,7 @@ int main (int argc, char** argv)
             }
         return 0;
     }
+    if (args[0] == "--promo") { runPromo (juce::File::getCurrentWorkingDirectory().getChildFile (args[1]), args[2]); return failures; }
     if (args[0] == "--snap") { runSnapshots (juce::File::getCurrentWorkingDirectory().getChildFile (args[1]), args[2]); return failures; }
     if (args[0] == "--render") { renderFile (juce::File::getCurrentWorkingDirectory().getChildFile (args[1]), juce::File::getCurrentWorkingDirectory().getChildFile (args[2]), args[3].isEmpty() ? 0 : args[3].getIntValue()); return failures; }
 

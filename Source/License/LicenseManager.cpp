@@ -187,13 +187,13 @@ LicenseManager::Result LicenseManager::activate (const juce::String& rawKey)
         return { false, fr ("Impossible de joindre Gumroad. Vérifie ta connexion internet et réessaie (la connexion n'est nécessaire qu'une fois).") };
     if (! r.success)
     {
-        if (r.message.containsIgnoreCase ("disabled")) return { false, fr ("Cette clé a été désactivée. Contacte le support.") };
+        if (r.message.containsIgnoreCase ("disabled")) return { false, fr ("Cette clé a été désactivée. Écris à ") + supportEmail + "." };
         return { false, fr ("Clé inconnue pour WHALE Mastering. Vérifie qu'elle est complète (copie-colle depuis l'e-mail de Gumroad).") };
     }
     if (r.refunded) return { false, fr ("Cet achat a été remboursé : la clé n'est plus valable.") };
     if (r.uses > maxActivations)
         return { false, fr ("Cette clé a déjà été activée sur ") + juce::String (r.uses - 1) + fr (" ordinateurs (maximum ") + juce::String (maxActivations)
-                        + fr ("). Contacte le support pour libérer un ordinateur.") };
+                        + fr ("). Écris à ") + supportEmail + fr (" pour libérer un ordinateur.") };
     {
         const juce::ScopedLock sl (lock);
         rec.key = key; rec.email = r.email;
