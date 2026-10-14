@@ -1,6 +1,6 @@
 ; Windows installer for WHALE (Inno Setup 6). Built by .github/workflows/build.yml.
 #ifndef AppVersion
-  #define AppVersion "1.1.0-beta1"
+  #define AppVersion "1.1.0-beta2"
 #endif
 
 [Setup]

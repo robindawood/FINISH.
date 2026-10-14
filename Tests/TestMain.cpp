@@ -20,6 +20,7 @@ struct TestAccess
     static void showBrowser (WhaleEditor& e) { e.browser.refresh(); e.browser.setVisible (true); }
     static void hideBrowser (WhaleEditor& e) { e.browser.setVisible (false); }
     static juce::Component& browser (WhaleEditor& e) { return e.browser; }
+    static void showLicence (WhaleEditor& e, bool show) { e.showLicence (show); }
 };
 
 namespace
@@ -624,6 +625,17 @@ namespace
         setParam (p, PID::manualDrive, 9.0f);
         play (6.0);
         snapshot (*ed, dir.getChildFile ("whale_7_trop_fort.png"));
+        // licence: trial (header link + panel), then trial over
+        LicenseManager::get().forceStatus (LicenseManager::Status::trial);
+        TestAccess::showLicence (*ed, false); play (0.2);
+        snapshot (*ed, dir.getChildFile ("whale_8a_essai_entete.png"));
+        TestAccess::showLicence (*ed, true); play (0.2);
+        snapshot (*ed, dir.getChildFile ("whale_8b_licence_essai.png"));
+        LicenseManager::get().forceStatus (LicenseManager::Status::expired);
+        TestAccess::showLicence (*ed, true); play (0.2);
+        snapshot (*ed, dir.getChildFile ("whale_8c_licence_terminee.png"));
+        LicenseManager::get().forceStatus (LicenseManager::Status::activated);
+        TestAccess::showLicence (*ed, false);
         setParam (p, PID::target, (float) styleTarget);
         setParam (p, PID::manualDrive, 0.0f);
         // phase problem: polarity-inverted right channel (synthetic source)
@@ -682,11 +694,144 @@ namespace
     }
 }
 
+static void testLicense()
+{
+    std::cout << "Licence (trial, Gumroad key, silence)\n";
+    using LM = LicenseManager;
+    auto root = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("whale_lic_test");
+    root.deleteRecursively();
+    const auto mainDir = root.getChildFile ("main"), backDir = root.getChildFile ("back");
+    juce::int64 t0 = juce::Time::currentTimeMillis();
+    juce::int64 now = t0;
+    const juce::int64 day = 24LL * 3600 * 1000;
+    LM::VerifyReply reply;
+    int calls = 0; bool lastIncrement = false;
+    auto verifier = [&] (const juce::String&, bool inc) { ++calls; lastIncrement = inc; return reply; };
+    auto clock = [&] { return juce::Time (now); };
+    auto make = [&] { return std::make_unique<LM> (mainDir, backDir, verifier, clock); };
+
+    {
+        auto m = make();
+        CHECK (m->getStatus() == LM::Status::trial && m->trialDaysLeft() == 7, "first run: 7-day trial");
+        CHECK (m->mainFile().existsAsFile() && m->backupFile().existsAsFile(), "trial remembered in two files");
+    }
+    now = t0 + 3 * day + 1000;
+    CHECK (make()->trialDaysLeft() == 4, "3 days later: 4 days left");
+    now = t0 + 7 * day + 1000;
+    CHECK (make()->getStatus() == LM::Status::expired, "after 7 days: trial over");
+    {
+        auto m = make();
+        CHECK (m->isLocked(), "trial over and not activated: locked");
+    }
+    // deleting the main file does not restart the trial
+    make()->mainFile().deleteFile();
+    CHECK (make()->getStatus() == LM::Status::expired, "main file deleted: still over (backup)");
+    // clock set back: no days given back
+    now = t0 + day;
+    CHECK (make()->getStatus() == LM::Status::expired, "clock set back: still over");
+    // edited files: signature broken
+    root.deleteRecursively();
+    now = t0;
+    make();
+    for (auto f : { mainDir.getChildFile ("licence.whale"), backDir.getChildFile ("com.whaleaudio.whale.dat") })
+    {
+        auto x = juce::XmlDocument::parse (f);
+        x->setAttribute ("start", juce::String (t0 + 30 * day));
+        x->writeTo (f);
+    }
+    CHECK (make()->getStatus() == LM::Status::expired, "edited licence files are refused");
+
+    // activation
+    root.deleteRecursively();
+    now = t0 + 10 * day;
+    {
+        auto m = make();
+        reply = {}; reply.reached = false;
+        auto r = m->activate ("6F0E4C97-B72A4E69-A11BF6C4-AF6517E7");
+        CHECK (! r.ok && r.message.contains ("connexion") && m->getStatus() == LM::Status::trial, "no connection: clear message, nothing changes");
+        reply = {}; reply.reached = true; reply.success = false; reply.message = "That license does not exist for the provided product.";
+        r = m->activate ("BAD-KEY-123456");
+        CHECK (! r.ok && r.message.contains (juce::CharPointer_UTF8 ("Clé inconnue")), "unknown key refused");
+        reply = {}; reply.reached = true; reply.success = true; reply.uses = 1; reply.refunded = true;
+        CHECK (! m->activate ("6F0E4C97-B72A4E69-A11BF6C4-AF6517E7").ok, "refunded purchase refused");
+        reply.refunded = false; reply.uses = LM::maxActivations + 1;
+        CHECK (! m->activate ("6F0E4C97-B72A4E69-A11BF6C4-AF6517E7").ok, "too many computers refused");
+        reply.uses = 1; reply.email = "client@example.com";
+        r = m->activate ("  6f0e4c97-b72a4e69-a11bf6c4-af6517e7 \n");
+        CHECK (r.ok && lastIncrement && m->getStatus() == LM::Status::activated && m->getEmail() == "client@example.com", "valid key: activated (counts one computer)");
+        CHECK (m->getKey() == "6F0E4C97-B72A4E69-A11BF6C4-AF6517E7", "key cleaned up (spaces, case)");
+    }
+    now = t0 + 400 * day;
+    calls = 0;
+    {
+        auto m = make();
+        CHECK (m->getStatus() == LM::Status::activated && ! m->isLocked() && calls == 0, "activated licence loads offline, a year later");
+        reply = {}; reply.reached = false;
+        CHECK (m->recheckNow() && m->getStatus() == LM::Status::activated, "re-check offline: still activated");
+        CHECK (! lastIncrement, "re-check does not count a computer");
+        reply = {}; reply.reached = true; reply.success = false; reply.message = "This license key has been disabled.";
+        CHECK (! m->recheckNow() && m->getStatus() == LM::Status::expired, "disabled key: licence revoked");
+    }
+    CHECK (make()->getStatus() == LM::Status::expired, "revocation saved");
+    root.deleteRecursively();
+
+    // Gumroad replies
+    {
+        auto ok = LM::parseReply (R"({"success":true,"uses":2,"purchase":{"email":"a@b.c","refunded":false,"chargebacked":false,"disputed":false}})");
+        CHECK (ok.reached && ok.success && ok.uses == 2 && ok.email == "a@b.c" && ! ok.refunded, "Gumroad success reply parsed");
+        auto bad = LM::parseReply (R"({"success":false,"message":"That license does not exist for the provided product."})");
+        CHECK (bad.reached && ! bad.success && bad.message.contains ("does not exist"), "Gumroad 404 reply parsed");
+        auto cb = LM::parseReply (R"({"success":true,"uses":1,"purchase":{"chargebacked":true}})");
+        CHECK (cb.refunded, "chargeback counts as refunded");
+        CHECK (! LM::parseReply ("<html>proxy error</html>").reached, "non-JSON answer = not reached");
+    }
+
+    // silence when locked
+    {
+        WhaleAudioProcessor p;
+        p.setRateAndBufferSizeDetails (44100.0, 512);
+        p.prepareToPlay (44100.0, 512);
+        setParam (p, PID::bypass, 1.0f);
+        auto& lic = LicenseManager::get();
+        lic.forceStatus (LM::Status::expired);
+        juce::AudioBuffer<float> b (2, 512); juce::MidiBuffer midi;
+        int silentBlocks = 0, loudBlocks = 0; double ph = 0;
+        for (int k = 0; k < (int) (44.0 * 44100 / 512); ++k)
+        {
+            for (int i = 0; i < 512; ++i) { const float v = 0.3f * (float) std::sin (ph); ph += 2.0 * juce::MathConstants<double>::pi * 220.0 / 44100.0; b.setSample (0, i, v); b.setSample (1, i, v); }
+            p.processBlock (b, midi);
+            const float m = b.getMagnitude (0, 512);
+            if (m < 1.0e-5f) ++silentBlocks; else if (m > 0.1f) ++loudBlocks;
+        }
+        const double silentSec = silentBlocks * 512.0 / 44100.0;
+        std::cout << "    locked: " << silentSec << " s silent over 44 s\n";
+        CHECK (silentSec > 1.7 && silentSec < 2.1 && loudBlocks > 0, "trial over: 2 s of silence every 40 s");
+        lic.forceStatus (LM::Status::activated);
+        int silentAfter = 0;
+        for (int k = 0; k < (int) (44.0 * 44100 / 512); ++k)
+        {
+            for (int i = 0; i < 512; ++i) { const float v = 0.3f * (float) std::sin (ph); ph += 2.0 * juce::MathConstants<double>::pi * 220.0 / 44100.0; b.setSample (0, i, v); b.setSample (1, i, v); }
+            p.processBlock (b, midi);
+            if (b.getMagnitude (0, 512) < 1.0e-5f) ++silentAfter;
+        }
+        CHECK (silentAfter == 0, "activated: never silent");
+    }
+}
+
 int main (int argc, char** argv)
 {
     juce::ScopedJuceInitialiser_GUI gui;
     juce::StringArray args;
     for (int i = 1; i < argc; ++i) args.add (juce::String::fromUTF8 (argv[i]));
+    LicenseManager::get().forceStatus (LicenseManager::Status::activated);   // tests and renders are never silenced
+
+    if (args[0] == "--licence-online")
+    {
+        // real Gumroad API with a fake key: must answer "does not exist" (checks HTTPS + POST + JSON on this OS)
+        const auto r = LicenseManager::gumroadVerify ("00000000-00000000-00000000-00000000", false);
+        std::cout << "Gumroad reached: " << (r.reached ? "yes" : "no") << ", success: " << (r.success ? "yes" : "no") << ", message: " << r.message << "\n";
+        return r.reached && ! r.success ? 0 : 1;
+    }
 
     if (args[0] == "--cpu")
     {
@@ -744,6 +889,7 @@ int main (int argc, char** argv)
     testUndoAuto();
     testPresetLayering();
     testPresetsAndState();
+    testLicense();
     std::cout << (failures == 0 ? "\nALL TESTS PASSED\n" : "\nFAILURES: " + std::to_string (failures) + "\n");
     return failures == 0 ? 0 : 1;
 }

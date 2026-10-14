@@ -77,7 +77,9 @@ set(WHALE_SOURCES
     Source/UI/WhaleScene.cpp
     Source/UI/Widgets.cpp
     Source/UI/PresetBrowser.cpp
-    Source/UI/ExpertPanel.cpp)
+    Source/UI/ExpertPanel.cpp
+    Source/UI/LicensePanel.cpp
+    Source/License/LicenseManager.cpp)
 
 target_sources(WHALE PRIVATE ${WHALE_SOURCES})
 target_compile_features(WHALE PRIVATE cxx_std_17)
@@ -95,6 +97,7 @@ target_link_libraries(WHALE
         WhaleAssets
         juce::juce_audio_utils
         juce::juce_dsp
+        juce::juce_cryptography
     PUBLIC
         juce::juce_recommended_config_flags
         juce::juce_recommended_lto_flags
@@ -113,6 +116,6 @@ if(WHALE_BUILD_TESTS)
     target_compile_features(WhaleTests PRIVATE cxx_std_17)
     target_compile_definitions(WhaleTests PRIVATE ${WHALE_DEFINITIONS} JucePlugin_Name="WHALE" JUCE_STANDALONE_APPLICATION=1 JUCE_MODAL_LOOPS_PERMITTED=1 WHALE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
     target_link_libraries(WhaleTests PRIVATE
-        WhaleAssets juce::juce_audio_utils juce::juce_dsp
+        WhaleAssets juce::juce_audio_utils juce::juce_dsp juce::juce_cryptography
         juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)
 endif()

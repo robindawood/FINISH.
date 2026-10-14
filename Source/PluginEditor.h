@@ -5,6 +5,7 @@
 #include "UI/WhaleScene.h"
 #include "UI/PresetBrowser.h"
 #include "UI/ExpertPanel.h"
+#include "UI/LicensePanel.h"
 
 // Fixed 1200 x 750 design, scaled as a whole when the window is resized.
 class WhaleEditor : public juce::AudioProcessorEditor, private juce::Timer
@@ -59,6 +60,10 @@ private:
     MeterPanel meters;
     ExpertPanel expert;
     PresetBrowser browser;
+    LicensePanel licencePanel;
+    TextLink licenceLink { "" };
+    void showLicence (bool);
+    void updateLicenceLink();
 
     double lastTime = 0;
     float tpHold = -100, tpHoldAge = 0, peak10 = -100, peak10Age = 0, lufsSmooth = -70;

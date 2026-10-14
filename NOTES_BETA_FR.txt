@@ -1,5 +1,14 @@
-WHALE 1.1.0 bêta 1 — notes de version
+WHALE 1.1.0 bêta 2 — notes de version
 =====================================
+
+NOUVEAU DANS LA BÊTA 2 : LICENCE
+- Essai complet de 7 jours (compteur « ESSAI · x J » en haut à gauche).
+- Activation par la clé Gumroad reçue après l'achat : clic sur « ESSAI » / « ACTIVER » ou menu ≡ > Licence.
+  Internet n'est nécessaire qu'au moment de l'activation ; ensuite WHALE fonctionne hors connexion.
+  Une clé peut être activée sur 5 ordinateurs.
+- Essai terminé sans licence : WHALE coupe le son 2 secondes toutes les 40 secondes.
+
+DÉJÀ DANS LA BÊTA 1
 
 AUTO
 - Coupe-bas automatique (20 à 40 Hz, 36 dB/oct) quand il y a de l'infra-grave inutile ; coupe-bas de protection

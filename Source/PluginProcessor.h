@@ -8,6 +8,7 @@
 #include "Auto/AutoMaster.h"
 #include "Auto/SpectralCapture.h"
 #include "Presets/Presets.h"
+#include "License/LicenseManager.h"
 
 // Threads:
 //   audio thread   : input analyzer (for AUTO) + WhaleDSP. Reads parameters through atomics, publishes meters.
@@ -80,7 +81,11 @@ public:
     static void characterCurve (const WhalePreset& p, float out[29]);
 
     friend struct TestAccess;
+    LicenseManager& licence = LicenseManager::get();
+
 private:
+    juce::int64 lockPos = 0;              // trial over: position in the 40 s silence cycle (samples)
+    void applyTrialSilence (juce::AudioBuffer<float>&) noexcept;
     void timerCallback() override;
     WhaleDSP::Settings buildSettings() noexcept;
     void writeBase (const ModuleBase& b);

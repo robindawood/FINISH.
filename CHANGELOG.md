@@ -1,5 +1,9 @@
 # WHALE changelog
 
+## 1.1.0 beta 2
+- Licence: 7-day full trial, Gumroad licence key activation (online once, then offline, signed file bound to the
+  computer, 5 computers per key, 30-day background re-check), 2 s of silence every 40 s after the trial.
+
 ## 1.1.0 beta 1
 - AUTO: automatic low-cut, movable EQ bells (bounded least squares), comb tempo estimation, scored style detection with
   a runner-up style shown on close calls, listened passage and break warning in the report, gated loudness loop.

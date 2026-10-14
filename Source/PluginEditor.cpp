@@ -3,7 +3,7 @@
 using namespace Theme;
 
 WhaleEditor::WhaleEditor (WhaleAudioProcessor& p)
-    : AudioProcessorEditor (p), proc (p), presetBar(), ab (p.state), chain (p.state), expert (p), browser (p)
+    : AudioProcessorEditor (p), proc (p), presetBar(), ab (p.state), chain (p.state), expert (p), browser (p), licencePanel (p.licence)
 {
     setLookAndFeel (&lnf);
     addAndMakeVisible (content);
@@ -49,6 +49,14 @@ WhaleEditor::WhaleEditor (WhaleAudioProcessor& p)
 
     content.addChildComponent (expert);
     content.addChildComponent (browser);
+    content.addChildComponent (licencePanel);
+    content.addChildComponent (licenceLink);
+    licenceLink.onClick = [this] { showLicence (true); };
+    licencePanel.onClose = [this] { showLicence (false); };
+    proc.licence.update();
+    proc.licence.recheckIfDue();
+    updateLicenceLink();
+    if (proc.licence.isLocked()) showLicence (true);
 
     autoButton.onClick = [this] { proc.toggleAuto(); };
     autoButton.setTooltip (fr ("Lance la lecture (idéalement depuis le début du drop), puis clique : WHALE écoute 30 s, règle la chaîne, puis mesure le son traité et corrige ce qui reste. Re-clique pendant l'analyse pour annuler ; après, « Annuler AUTO » remet les réglages d'avant."));
@@ -105,7 +113,7 @@ void WhaleEditor::resized()
 
 bool WhaleEditor::keyPressed (const juce::KeyPress& k)
 {
-    if (k == juce::KeyPress::escapeKey) { browser.setVisible (false); openExpert (-1); return true; }
+    if (k == juce::KeyPress::escapeKey) { showLicence (false); browser.setVisible (false); openExpert (-1); return true; }
     return false;
 }
 
@@ -129,6 +137,8 @@ void WhaleEditor::layout()
     meters.setBounds (1000, 584, 180, 158);
     expert.setBounds (14, 62, designW - 28, 440);
     browser.setBounds (0, 50, designW, designH - 50);
+    licenceLink.setBounds (272, 15, 108, 26);
+    licencePanel.setBounds (0, 0, designW, designH);
 }
 
 void WhaleEditor::Content::paint (juce::Graphics& g)
@@ -198,6 +208,7 @@ void WhaleEditor::showMenu()
     m.addItem (6, fr ("Annuler AUTO (revenir aux réglages d'avant)"), proc.canUndoAuto());
     m.addItem (3, fr ("Tout remettre à neutre"));
     m.addItem (4, fr ("Ouvrir le dossier de mes presets"));
+    m.addItem (7, proc.licence.getStatus() == LicenseManager::Status::activated ? fr ("Licence (activée)") : fr ("Licence : activer WHALE…"));
     m.addSeparator();
     m.addItem (5, juce::String ("WHALE ") + WHALE_VERSION_STRING + fr (" — mastering par styles de référence"), false);
     m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (menuLink), [this] (int r)
@@ -206,8 +217,33 @@ void WhaleEditor::showMenu()
         else if (r == 2) setReducedAnimations (! reducedAnimations());
         else if (r == 3) proc.resetToNeutral();
         else if (r == 6) proc.undoAuto();
+        else if (r == 7) showLicence (true);
         else if (r == 4) { auto d = PresetManager::userFolder(); d.createDirectory(); d.startAsProcess(); }
     });
+}
+
+void WhaleEditor::showLicence (bool show)
+{
+    if (show) { browser.setVisible (false); openExpert (-1); licencePanel.refresh(); licencePanel.toFront (false); }
+    licencePanel.setVisible (show);
+    updateLicenceLink();
+}
+
+void WhaleEditor::updateLicenceLink()
+{
+    const auto st = proc.licence.getStatus();
+    licenceLink.setVisible (st != LicenseManager::Status::activated);
+    if (st == LicenseManager::Status::trial)
+    {
+        licenceLink.setText (fr ("ESSAI · ") + juce::String (proc.licence.trialDaysLeft()) + " J");
+        licenceLink.setTooltip (fr ("Version d'essai complète. Clique pour activer ta licence."));
+    }
+    else
+    {
+        licenceLink.setText (fr ("ACTIVER"));
+        licenceLink.setTooltip (fr ("Essai terminé : WHALE coupe le son 2 s toutes les 40 s. Clique pour activer ta licence."));
+    }
+    licenceLink.active = st == LicenseManager::Status::expired;
 }
 
 void WhaleEditor::timerCallback()
@@ -336,6 +372,13 @@ void WhaleEditor::timerCallback()
     scene.advance (in, dt);
     scene.repaint();
     if (expert.isVisible() && frameCounter % 3 == 0) expert.tick();
+    if (frameCounter % 60 == 0)
+    {
+        const auto before = proc.licence.getStatus();
+        proc.licence.update();
+        updateLicenceLink();
+        if (licencePanel.isVisible() || before != proc.licence.getStatus()) licencePanel.refresh();
+    }
 }
 
 juce::AudioProcessorEditor* WhaleAudioProcessor::createEditor() { return new WhaleEditor (*this); }

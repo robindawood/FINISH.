@@ -31,6 +31,13 @@ La baleine : elle remonte vers la surface (la cible de volume) pendant le master
 de phase, devient orange si c'est trop fort, et souffle des étoiles quand le master est validé.
 Menu ≡ > Animations réduites pour les ordinateurs moins puissants.
 
+LICENCE
+-------
+WHALE s'utilise librement pendant 7 jours (compteur « ESSAI » en haut à gauche). Ensuite, colle la clé de licence
+reçue par e-mail après l'achat : clic sur « ESSAI » / « ACTIVER », ou menu ≡ > Licence. Une connexion internet
+est nécessaire une seule fois, pour l'activation. Une clé fonctionne sur 5 ordinateurs.
+Sans licence après l'essai, WHALE coupe le son 2 secondes toutes les 40 secondes.
+
 VERSION BÊTA
 ------------
 Cette version est une bêta : elle sert à valider le son à l'oreille avant la version finale.

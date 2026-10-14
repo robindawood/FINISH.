@@ -134,6 +134,27 @@ void WhaleAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::
     else       outCap.markGap();
     if (sound) liveCap.push (buffer.getReadPointer (0), nc > 1 ? buffer.getReadPointer (1) : nullptr, ns);
     else       liveCap.markGap();
+    if (licence.isLocked()) applyTrialSilence (buffer);
+}
+
+// Trial over, not activated: 2 s of silence every 40 s (30 ms fades). The analysis above is not affected.
+void WhaleAudioProcessor::applyTrialSilence (juce::AudioBuffer<float>& buffer) noexcept
+{
+    const double sr = std::max (8000.0, getSampleRate());
+    const auto period = (juce::int64) (40.0 * sr), quiet = (juce::int64) (2.0 * sr), fade = (juce::int64) (0.03 * sr);
+    const auto start = period - quiet;
+    const int ns = buffer.getNumSamples();
+    for (int i = 0; i < ns; ++i)
+    {
+        const auto p = (lockPos + i) % period;
+        float g = 1.0f;
+        if (p >= start - fade && p < start)      g = (float) (start - p) / (float) fade;
+        else if (p >= start && p < period - fade) g = 0.0f;
+        else if (p >= period - fade)            g = (float) (p - (period - fade)) / (float) fade;
+        if (g < 1.0f)
+            for (int c = 0; c < buffer.getNumChannels(); ++c) buffer.getWritePointer (c)[i] *= g;
+    }
+    lockPos = (lockPos + ns) % period;
 }
 
 // ------------------------------------------------------------------------------------------------- AUTO

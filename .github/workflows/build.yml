@@ -14,7 +14,7 @@ on:
   workflow_dispatch:
 
 env:
-  VERSION: 1.1.0-beta1
+  VERSION: 1.1.0-beta2
 
 jobs:
   build:
@@ -60,6 +60,13 @@ jobs:
       - name: Run offline tests (macOS)
         if: runner.os == 'macOS'
         run: build/WhaleTests_artefacts/Release/WhaleTests
+
+      # Licence activation path against the real Gumroad API (fake key -> "does not exist"). Informative only.
+      - name: Check Gumroad licence API
+        continue-on-error: true
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then build/WhaleTests_artefacts/Release/WhaleTests.exe --licence-online; else build/WhaleTests_artefacts/Release/WhaleTests --licence-online; fi
 
       - name: Ad-hoc sign (macOS)
         if: runner.os == 'macOS'
