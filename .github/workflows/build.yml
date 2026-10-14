@@ -53,20 +53,28 @@ jobs:
       - name: Build plugin and tests
         run: cmake --build build --config Release --parallel 4 --target WHALE_All WhaleTests
 
-      - name: Run offline tests (Windows)
-        if: runner.os == 'Windows'
-        run: build/WhaleTests_artefacts/Release/WhaleTests.exe
-
-      - name: Run offline tests (macOS)
-        if: runner.os == 'macOS'
-        run: build/WhaleTests_artefacts/Release/WhaleTests
+      # Failures are also posted as annotations (visible in the run summary without downloading the logs).
+      - name: Run offline tests
+        shell: bash
+        run: |
+          exe=build/WhaleTests_artefacts/Release/WhaleTests; [ "$RUNNER_OS" = "Windows" ] && exe="$exe.exe"
+          set +e; "$exe" > tests.log 2>&1; code=$?; set -e
+          cat tests.log
+          if [ $code -ne 0 ]; then
+            grep "FAIL" tests.log | head -20 | while IFS= read -r l; do echo "::error title=Test ($RUNNER_OS)::$l"; done
+            tail -n 12 tests.log | while IFS= read -r l; do echo "::warning title=Test log end ($RUNNER_OS)::$l"; done
+            exit $code
+          fi
 
       # Licence activation path against the real Gumroad API (fake key -> "does not exist"). Informative only.
       - name: Check Gumroad licence API
         continue-on-error: true
         shell: bash
         run: |
-          if [ "$RUNNER_OS" = "Windows" ]; then build/WhaleTests_artefacts/Release/WhaleTests.exe --licence-online; else build/WhaleTests_artefacts/Release/WhaleTests --licence-online; fi
+          exe=build/WhaleTests_artefacts/Release/WhaleTests; [ "$RUNNER_OS" = "Windows" ] && exe="$exe.exe"
+          set +e; out=$("$exe" --licence-online 2>&1); code=$?; set -e
+          echo "$out"; echo "::notice title=Gumroad API ($RUNNER_OS)::$out"
+          exit $code
 
       - name: Ad-hoc sign (macOS)
         if: runner.os == 'macOS'
