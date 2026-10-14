@@ -32,7 +32,7 @@ jobs:
             os: windows-latest
             src: 'C:/wsrc'
           - name: macOS
-            os: macos-latest
+            os: macos-15-intel          # arm64 runners were not available (capacity); the build is universal anyway
             src: src
 
     steps:
