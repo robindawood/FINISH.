@@ -1,5 +1,8 @@
 # WHALE changelog
 
+## 1.1.1
+- Licence keys checked against the published Gumroad product.
+
 ## 1.1.0
 - First public release (same code as beta 3 + the BEFORE peak safety below).
 
