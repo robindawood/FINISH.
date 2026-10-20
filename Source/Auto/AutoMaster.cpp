@@ -113,6 +113,7 @@ namespace
             case styleLofi:       return out ({ { 60, 100 }, { 120, 200 } });
             case styleAfroTech:   return out ({ { 100, 150 } });
             case styleDancehall:  return out ({ { 100, 170 } });   // edits from 108 to 165 BPM: the spectrum decides
+            case styleEdm:        return out ({ { 124, 134 } });   // big room / festival
             default:              return 0.0f;
         }
     }
@@ -125,7 +126,7 @@ int AutoMaster::detectStyle (const AudioFeatures& f, double bpm, int* runnerUp, 
     if (f.hasSpectrum)
     {
         // Spectral distance to each style's references + tempo plausibility (0.15 per BPM outside the style's range).
-        // Lo-fi only for a dark, dynamic master. Leave-one-out on the 71 reference masters: 48/71, no false Dancehall;
+        // Lo-fi only for a dark, dynamic master. Leave-one-out on the 91 reference masters (1.2): 67/91, no false Dancehall;
         // most misses are house-family neighbours (Tech House / Afro / Afro Tech), which sound close anyway.
         int best = styleTechHouse, second = 0;
         float bestScore = 1.0e9f, secondScore = 1.0e9f;
@@ -135,6 +136,7 @@ int AutoMaster::detectStyle (const AudioFeatures& f, double bpm, int* runnerUp, 
             if (bpm > 0) score += 0.15f * tempoOutside (st, bpm);
             if (st == styleLofi && ! (f.highRatio < 0.02f && f.plr > 10.0f)) score += 5.0f;
             if (st == styleDancehall) score += 0.5f;   // very broad family (108-165 BPM edits): only when clearly closest
+            if (st == styleEdm) score += 0.6f;         // shares tempo and shape with Tech House: only when clearly closer
             if (score < bestScore) { secondScore = bestScore; second = best; bestScore = score; best = st; }
             else if (score < secondScore) { secondScore = score; second = st; }
         }
@@ -483,7 +485,7 @@ AutoResult AutoMaster::compute (const AudioFeatures& f, int styleParam, double b
     const auto& p = profile (r.style);
     const int n = p.numTracks;
     const bool lofi = r.style == styleLofi;
-    const bool hard = r.style == styleDnb || r.style == styleHardTechno;
+    const bool hard = r.style == styleDnb || r.style == styleHardTechno || r.style == styleEdm;
     auto& b = r.base;
 
     r.report.add (fr ("Style: ") + p.name + (r.styleWasDetected ? fr (" (detected") + (bpm > 0 ? ", " + juce::String (juce::roundToInt (r.style == styleLofi && bpm > 140.0 ? bpm / 2.0 : bpm)) + " BPM)" : juce::String (")")) : juce::String())

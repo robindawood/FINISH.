@@ -1,5 +1,11 @@
 # WHALE changelog
 
+## 1.2.0
+- New style: EDM / Big Room (11 festival masters profiled, 124-134 BPM), detected by AUTO or chosen in STYLE.
+- 4 new EDM presets: Main Stage, Big Room Kick, Euphoric Lead, Radio Edit (34 presets in total).
+- Drum & Bass profile rebuilt: tonal balance from 6 tracks (was 3); loudness and dynamics still from released masters.
+- Style detection re-checked on 91 reference masters.
+
 ## 1.1.1
 - Licence keys checked against the published Gumroad product.
 

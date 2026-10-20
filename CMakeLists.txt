@@ -4,7 +4,7 @@ cmake_minimum_required(VERSION 3.22)
 set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64" CACHE STRING "macOS architectures")
 set(CMAKE_OSX_DEPLOYMENT_TARGET "10.13" CACHE STRING "Minimum macOS version")
 
-project(WHALE VERSION 1.1.1 LANGUAGES C CXX)
+project(WHALE VERSION 1.2.0 LANGUAGES C CXX)
 
 # Source files contain UTF-8 text (French UI strings).
 if(MSVC)

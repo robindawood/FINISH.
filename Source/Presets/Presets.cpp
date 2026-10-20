@@ -77,6 +77,15 @@ namespace
           { 1.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f }, { 0.5f, 0.3f, 0.5f, 0.3f }, 0.2f, 0.35f, 0.55f, 0.75f, 0.0f, 0.4f, 160.0f },
         { "Afrobeats Smooth", "Warm, silky vocals, breathing dynamics", styleDancehall, styleTarget, -1.0f,
           { 0.0f, 0.0f, 0.5f, 0.0f, 0.0f, -0.5f, 0.5f }, { 0.3f, 0.2f, 0.5f, 0.3f }, 0.1f, 0.35f, 0.3f, 0.25f, 0.5f, 0.6f, 140.0f },
+        // 1.2: EDM / Big Room
+        { "Main Stage", "Huge and loud for festival drops", styleEdm, styleTarget, -0.5f,
+          { 0.5f, 1.0f, 0.0f, 0.0f, 0.5f, 1.0f, 0.5f }, { 0.5f, 0.4f, 0.5f, 0.4f }, 0.3f, 0.3f, 0.55f, 0.8f, 0.5f, 0.35f, 160.0f },
+        { "Big Room Kick", "Kick in front, tight low end, hard-hitting", styleEdm, styleTarget, -0.5f,
+          { 0.0f, 1.5f, -0.5f, 0.0f, 0.5f, 0.0f, 0.0f }, { 0.4f, 0.4f, 0.4f, 0.3f }, 0.65f, 0.2f, 0.2f, 0.7f, 0.0f, 0.4f, 160.0f },
+        { "Euphoric Lead", "Bright, wide supersaws, open top end", styleEdm, styleTarget, -1.0f,
+          { 0.0f, 0.0f, -0.5f, 0.5f, 1.0f, 1.0f, 1.0f }, { 0.3f, 0.3f, 0.6f, 0.5f }, 0.2f, 0.15f, 0.35f, 0.5f, 1.0f, 0.5f, 150.0f },
+        { "Radio Edit", "Balanced -11 LUFS, cleaner for streaming and radio", styleEdm, 2, -1.0f,
+          { 0.0f, 0.5f, 0.0f, 0.0f, 0.5f, 0.0f, 0.5f }, { 0.3f, 0.3f, 0.4f, 0.3f }, 0.25f, 0.1f, 0.3f, 0.3f, 0.3f, 0.55f, 140.0f },
     };
 }
 

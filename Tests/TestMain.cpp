@@ -346,6 +346,9 @@ namespace
             CHECK (AutoMaster::detectStyle (dh, 113.0) == styleDancehall, "Dancehall curve at 113 BPM -> Afro / Dancehall");
             auto af = featuresFromProfile (AutoMaster::profile (styleAfro));
             CHECK (AutoMaster::detectStyle (af, 122.0) == styleAfro, "Afro House curve at 122 BPM -> Afro / Latin House");
+            auto edm = featuresFromProfile (AutoMaster::profile (styleEdm));
+            CHECK (AutoMaster::detectStyle (edm, 128.0) == styleEdm, "EDM curve at 128 BPM -> EDM / Big Room");
+            CHECK (AutoMaster::detectStyle (featuresFromProfile (AutoMaster::profile (styleTechHouse)), 126.0) == styleTechHouse, "Tech House curve at 126 BPM stays Tech House (not EDM)");
         }
         CHECK (AutoMaster::detectStyle (f, 126.0) == styleTechHouse || AutoMaster::detectStyle (f, 126.0) == styleAfro, "126 BPM -> house family");
         {

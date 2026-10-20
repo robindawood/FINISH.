@@ -4,7 +4,7 @@
 """
 import json, os
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-ORDER = ["Tech House / House", "Afro / Latin House", "Hard Techno / Rave", "Drum & Bass", "UK Garage / Bass", "Lo-fi / Chill", "Afro Tech / Riddim", "Afro / Dancehall"]   # = style index - 1 (append only: projects store the index)
+ORDER = ["Tech House / House", "Afro / Latin House", "Hard Techno / Rave", "Drum & Bass", "UK Garage / Bass", "Lo-fi / Chill", "Afro Tech / Riddim", "Afro / Dancehall", "EDM / Big Room"]   # = style index - 1 (append only: projects store the index)
 FEATS = ["lufs_i", "st_drop", "plr", "lra", "tempo", "lowRatio", "subRatio", "lowMidRatio", "presenceRatio", "highRatio",
          "sideRatio", "lowSideRatio", "correlation", "true_peak", "plr_drop"]
 profs = {}
