@@ -50,6 +50,8 @@ WhaleEditor::WhaleEditor (WhaleAudioProcessor& p)
     content.addChildComponent (expert);
     content.addChildComponent (browser);
     content.addChildComponent (licencePanel);
+    content.addChildComponent (welcome);
+    welcome.onClose = [this] { showWelcome (false); };
     content.addChildComponent (licenceLink);
     licenceLink.onClick = [this] { showLicence (true); };
     licencePanel.onClose = [this] { showLicence (false); };
@@ -57,6 +59,7 @@ WhaleEditor::WhaleEditor (WhaleAudioProcessor& p)
     proc.licence.recheckIfDue();
     updateLicenceLink();
     if (proc.licence.isLocked()) showLicence (true);
+    else if (! WelcomeOverlay::wasSeen()) showWelcome (true);
 
     autoButton.onClick = [this] { proc.toggleAuto(); };
     autoButton.setTooltip (fr ("Start playback (ideally at the start of the drop), then click: WHALE listens for 30 s, sets the chain, then measures the processed sound and fine-tunes what is left. Click again during the analysis to cancel; afterwards, “Undo AUTO” restores your previous settings."));
@@ -126,19 +129,20 @@ void WhaleEditor::layout()
     ab.setBounds (900, 12, 150, 47);
     expertLink.setBounds (1062, 12, 80, 34);
     menuLink.setBounds (1148, 12, 40, 34);
-    chain.setBounds (20, 516, 1160, 40);
+    chain.setBounds (20, 509, 1160, 51);
     autoButton.setBounds (14, 566, 184, 184);
     undoAutoLink.setBounds (10, 108, 150, 26);
     styleBox.setBounds (210, 600, 150, 30);
     targetBox.setBounds (210, 660, 150, 30);
     dosage.setBounds (206, 716, 158, 20);
     for (int i = 0; i < 8; ++i)
-        knobs[(size_t) i]->setBounds (400 + i * 72 + (i >= 4 ? 30 : 0), 600, 64, 98);
+        knobs[(size_t) i]->setBounds (396 + i * 72 + (i >= 4 ? 30 : 0), 594, 72, 104);
     meters.setBounds (1000, 584, 180, 158);
     expert.setBounds (14, 62, designW - 28, 440);
     browser.setBounds (0, 50, designW, designH - 50);
     licenceLink.setBounds (272, 15, 108, 26);
     licencePanel.setBounds (0, 0, designW, designH);
+    welcome.setBounds (0, 0, designW, designH);
 }
 
 void WhaleEditor::Content::paint (juce::Graphics& g)
@@ -208,9 +212,10 @@ void WhaleEditor::showMenu()
     m.addItem (6, fr ("Undo AUTO (back to the previous settings)"), proc.canUndoAuto());
     m.addItem (3, fr ("Reset everything to neutral"));
     m.addItem (4, fr ("Open my presets folder"));
+    m.addItem (8, fr ("Quick tour (first steps)"));
     m.addItem (7, proc.licence.getStatus() == LicenseManager::Status::activated ? fr ("License (activated)") : fr ("License: activate WHALE…"));
     m.addSeparator();
-    m.addItem (5, juce::String ("WHALE ") + WHALE_VERSION_STRING + fr (" — mastering by reference styles"), false);
+    m.addItem (5, juce::String ("WHALE ") + WHALE_VERSION_STRING + fr (" by Rawdio Labs — mastering by reference styles"), false);
     m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (menuLink), [this] (int r)
     {
         if (r == 1) openExpert (7);
@@ -218,8 +223,15 @@ void WhaleEditor::showMenu()
         else if (r == 3) proc.resetToNeutral();
         else if (r == 6) proc.undoAuto();
         else if (r == 7) showLicence (true);
+        else if (r == 8) showWelcome (true);
         else if (r == 4) { auto d = PresetManager::userFolder(); d.createDirectory(); d.startAsProcess(); }
     });
+}
+
+void WhaleEditor::showWelcome (bool show)
+{
+    if (show) { browser.setVisible (false); openExpert (-1); welcome.toFront (true); }
+    welcome.setVisible (show);
 }
 
 void WhaleEditor::showLicence (bool show)
@@ -303,6 +315,45 @@ void WhaleEditor::timerCallback()
     chain.setActivity (4, sound ? (std::abs (proc.state.getRawParameterValue (PID::toneLow)->load()) + std::abs (proc.state.getRawParameterValue (PID::toneAir)->load())) / 5.0f + 0.1f : 0);
     chain.setActivity (5, sound ? d.getClipDb() / 2.5f : 0);
     chain.setActivity (6, sound ? d.getGainReductionDb() / 6.0f : 0);
+    {
+        auto db = [] (float v) { return (v >= 0 ? "+" : "") + juce::String (v, 1) + " dB"; };
+        auto raw = [this] (const char* id) { return proc.state.getRawParameterValue (id)->load(); };
+        chain.setValueText (0, sound ? (spec > 0.1f ? db (-spec) : juce::String ("EQ")) : juce::String());
+        chain.setValueText (1, sound ? db (-comp) : juce::String());
+        chain.setValueText (2, sound ? juce::String (juce::roundToInt (100.0f * juce::jlimit (0.0f, 1.0f, dos * raw (PID::satDrive) + 0.8f * (float) (knobs[2]->slider.getValue() - 0.5)))) + " %" : juce::String());
+        chain.setValueText (3, sound ? db (dos * raw (PID::widthSide) + 6.0f * (float) (knobs[4]->slider.getValue() - 0.5)) : juce::String());
+        chain.setValueText (4, sound ? "L" + db (dos * raw (PID::toneLow) + 6.0f * (float) (knobs[5]->slider.getValue() - 0.5)).upToFirstOccurrenceOf (" ", false, false)
+                                      + "  A" + db (dos * raw (PID::toneAir) + 6.0f * (float) (knobs[3]->slider.getValue() - 0.5)) : juce::String());
+        chain.setValueText (5, sound ? db (-d.getClipDb()) : juce::String());
+        chain.setValueText (6, sound ? db (-d.getGainReductionDb()) : juce::String());
+
+        // knobs: the diamond = what AUTO / the preset set for the module, the value = what is heard with the nudge
+        const bool compOn = raw (PID::compOn) > 0.5f, satOn = raw (PID::satOn) > 0.5f, widthOn = raw (PID::widthOn) > 0.5f, toneOn = raw (PID::toneOn) > 0.5f;
+        auto m = [this] (int i) { return (float) knobs[(size_t) i]->slider.getValue() - 0.5f; };
+        auto pct = [] (float v) { return juce::String (juce::roundToInt (100.0f * v)); };
+        auto sdb = [] (float v) { return (v >= 0 ? "+" : "") + juce::String (v, 1); };
+        auto unit = [&] (int i, bool on, float base, float k, auto fmt, const juce::String& suffix, bool dbScale)
+        {
+            if (! on) { knobs[(size_t) i]->setAutoInfo (-1.0f, -1.0f, "off", false); return; }
+            const float eff = dbScale ? base + k * m (i) : juce::jlimit (0.0f, 1.0f, base + k * m (i));
+            const bool moved = std::abs (m (i)) > 0.005f;
+            auto pos = [&] (float v) { return dbScale ? juce::jlimit (0.0f, 1.0f, (v + 6.0f) / 12.0f) : v; };
+            knobs[(size_t) i]->setAutoInfo (pos (base), pos (eff), moved ? fmt (base) + juce::String::fromUTF8 ("\xe2\x86\x92") + fmt (eff) + suffix : fmt (base) + suffix, moved);
+        };
+        unit (0, compOn, dos * raw (PID::compGlue), 1.0f, pct, " %", false);
+        unit (1, compOn, dos * raw (PID::compPunch), 1.0f, pct, " %", false);
+        unit (2, satOn, dos * raw (PID::satDrive), 0.8f, pct, " %", false);
+        unit (3, toneOn, dos * raw (PID::toneAir), 6.0f, sdb, " dB", true);
+        unit (4, widthOn, dos * raw (PID::widthSide), 6.0f, sdb, " dB", true);
+        unit (5, toneOn, dos * raw (PID::toneLow), 6.0f, sdb, " dB", true);
+        unit (6, compOn, raw (PID::compDetail), 0.8f, pct, " %", false);
+        {
+            const float tgt0 = proc.getEffectiveTarget(), eff = tgt0 + 6.0f * m (7);
+            const bool moved = std::abs (m (7)) > 0.005f;
+            auto f1 = [] (float v) { return juce::String (v, 1); };
+            knobs[7]->setAutoInfo (0.5f, juce::jlimit (0.0f, 1.0f, 0.5f + m (7)), moved ? f1 (tgt0) + juce::String::fromUTF8 ("\xe2\x86\x92") + f1 (eff) : f1 (tgt0) + " LUFS", moved);
+        }
+    }
     if (++frameCounter % 2 == 0) chain.repaint();
 
     // ---- AUTO button
@@ -333,6 +384,17 @@ void WhaleEditor::timerCallback()
     WhaleScene::Input in;
     for (int b = 0; b < 8; ++b) in.bands[b] = d.getVisBand (b);
     in.kick = d.getKick();
+    {
+        const auto& prof = AutoMaster::profile (proc.getActiveStyle());
+        const float* cc = proc.getCharacterCurve();
+        for (int b = 0; b < 29; ++b)
+        {
+            const float c = cc != nullptr ? cc[b] : 0.0f;          // the preset's colour is intentional: the references move with it
+            in.refMed[b] = prof.thirdOctMedian[b] + c; in.refLo[b] = prof.thirdOctP25[b] + c; in.refHi[b] = prof.thirdOctP75[b] + c;
+        }
+        in.hasSpectrum = sound && proc.getLiveSpectrum (in.spectrum);
+        in.styleName = styleShortNames()[proc.getActiveStyle()];
+    }
     in.width = d.getWidth();
     in.loudErr = sound ? proc.getLoudnessError() : -8.0f;
     in.reduced = reducedAnimations();

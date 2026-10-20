@@ -1,5 +1,13 @@
 # WHALE changelog
 
+## 1.3.0
+- Living whale: glows with the kick, ripples and bubbles on each hit, turns turquoise when the master is validated.
+- Sea floor: live spectrum of what you hear over the references of the style, with the two clearest gaps marked.
+- Knobs show what AUTO (or the preset) set: white diamond = AUTO's setting, green dot + value = what you hear.
+- Chain modules light up while they work and show their live amount (gain reduction, drive, width, tone).
+- First-launch guide (3 steps), available again from the menu (Quick tour).
+- WHALE is now published by Rawdio Labs (licences, settings and presets are kept).
+
 ## 1.2.0
 - New style: EDM / Big Room (11 festival masters profiled, 124-134 BPM), detected by AUTO or chosen in STYLE.
 - 4 new EDM presets: Main Stage, Big Room Kick, Euphoric Lead, Radio Edit (34 presets in total).

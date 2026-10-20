@@ -1,3 +1,4 @@
+#include "../Version.h"
 #include "LicensePanel.h"
 
 using namespace Theme;
@@ -106,6 +107,9 @@ void LicensePanel::paint (juce::Graphics& g)
     g.setColour (juce::Colours::white);
     g.setFont (display (20.0f, 0.04f));
     g.drawText ("WHALE MASTERING", x, y + 54, w, 28, juce::Justification::centred);
+    g.setColour (faint);
+    g.setFont (mono (10.5f, 0.12f));
+    g.drawText (juce::String ("v") + WHALE_VERSION_STRING + fr ("  \xc2\xb7  BY RAWDIO LABS"), x, (int) c.getBottom() - 26, w, 14, juce::Justification::centred);
 
     const auto st = lic.getStatus();
     g.setFont (bold (14.0f));

@@ -6,6 +6,7 @@
 #include "UI/PresetBrowser.h"
 #include "UI/ExpertPanel.h"
 #include "UI/LicensePanel.h"
+#include "UI/WelcomeOverlay.h"
 
 // Fixed 1200 x 750 design, scaled as a whole when the window is resized.
 class WhaleEditor : public juce::AudioProcessorEditor, private juce::Timer
@@ -61,6 +62,10 @@ private:
     ExpertPanel expert;
     PresetBrowser browser;
     LicensePanel licencePanel;
+    WelcomeOverlay welcome;
+public:
+    void showWelcome (bool show);     // first launch / menu > Quick tour (tests hide it before rendering)
+private:
     TextLink licenceLink { "" };
     void showLicence (bool);
     void updateLicenceLink();

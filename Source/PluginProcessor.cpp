@@ -641,7 +641,9 @@ void WhaleAudioProcessor::updateToneMeter()
 {
     liveCap.keepLastSeconds (20.0);
     const auto r = liveCap.result();
-    if (! r.valid || r.loudSeconds < 4.0) { toneDistance.store (-1.0f); return; }
+    if (! r.valid || r.loudSeconds < 4.0) { toneDistance.store (-1.0f); liveThirdsValid = false; return; }
+    std::copy (r.thirdOctDb, r.thirdOctDb + 29, liveThirds);
+    liveThirdsValid = true;
     AudioFeatures f;
     f.valid = f.hasSpectrum = true;
     for (int b = 0; b < 29; ++b) f.thirdOctDb[b] = r.thirdOctDb[b] - (characterIndex >= 0 ? charCurve[b] : 0.0f);

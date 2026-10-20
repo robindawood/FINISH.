@@ -66,6 +66,9 @@ public:
     float getOutputIntegrated() const { return outIntegrated; }
     // ---- Indicators (what is heard)
     float getToneDistance() const { return toneDistance.load(); }    // dB outside the style's references, -1 = not enough heard yet
+    // Sea floor: 1/3-octave curve of what is heard (rolling 20 s, message thread). False until enough is heard.
+    bool getLiveSpectrum (float out[29]) const { if (! liveThirdsValid) return false; std::copy (liveThirds, liveThirds + 29, out); return true; }
+    const float* getCharacterCurve() const { return activeCharacterCurve(); }
     float getExpectedCrest() const;                                  // peak-to-loudness the target leaves (ceiling - target)
     bool isMatchMeasured() const { return dsp.isMatchReady(); }
     bool isTargetLoudnessMode() const;
@@ -97,6 +100,8 @@ private:
     SpectralCapture inCap, outCap;                       // AUTO: spectra measured like the reference profiles
     SpectralCapture liveCap;                             // live TONALITÉ meter: rolling 20 s of what is heard
     std::atomic<float> toneDistance { -1.0f };
+    float liveThirds[29] {};
+    bool liveThirdsValid = false;
     int toneTick = 0;
     void updateToneMeter();
     std::vector<AnalysisFrame> verifyOutFrames;          // output loudness frames during a verification capture

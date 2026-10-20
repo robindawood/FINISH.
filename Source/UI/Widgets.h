@@ -26,8 +26,14 @@ public:
     MacroKnob (juce::AudioProcessorValueTreeState&, const char* paramId, const juce::String& name, juce::Colour);
     void resized() override;
     void paint (juce::Graphics&) override;
+    void paintOverChildren (juce::Graphics&) override;
+    // 1.3: what AUTO (or the preset) set for this module, and what is heard with the knob's nudge (0..1 on the ring)
+    void setAutoInfo (float basePos, float effPos, const juce::String& valueText, bool moved);
     juce::Slider slider;
 private:
+    float autoBase = -1.0f, autoEff = -1.0f;
+    juce::String autoText;
+    bool autoMoved = false;
     juce::String name;
     juce::Colour colour;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> att;
@@ -58,6 +64,7 @@ public:
     explicit ChainStrip (juce::AudioProcessorValueTreeState&);
     std::function<void (int)> onOpenModule;
     void setActivity (int module, float a) { activity[(size_t) module] = a; }
+    void setValueText (int module, const juce::String& v) { values[(size_t) module] = v; }
     void setSelected (int m) { selected = m; repaint(); }
     void paint (juce::Graphics&) override;
     void mouseUp (const juce::MouseEvent&) override;
@@ -66,6 +73,7 @@ private:
     juce::Rectangle<float> chipBounds (int i) const;
     juce::AudioProcessorValueTreeState& state;
     std::array<float, 7> activity {};
+    std::array<juce::String, 7> values;
     int selected = -1;
 };
 

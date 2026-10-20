@@ -4,7 +4,7 @@ cmake_minimum_required(VERSION 3.22)
 set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64" CACHE STRING "macOS architectures")
 set(CMAKE_OSX_DEPLOYMENT_TARGET "10.13" CACHE STRING "Minimum macOS version")
 
-project(WHALE VERSION 1.2.0 LANGUAGES C CXX)
+project(WHALE VERSION 1.3.0 LANGUAGES C CXX)
 
 # Source files contain UTF-8 text (French UI strings).
 if(MSVC)
@@ -36,7 +36,7 @@ endif()
 
 juce_add_plugin(WHALE
     PRODUCT_NAME "WHALE"
-    COMPANY_NAME "Whale Audio"
+    COMPANY_NAME "Rawdio Labs"
     BUNDLE_ID "com.whaleaudio.whale"
     VERSION ${PROJECT_VERSION}
     PLUGIN_MANUFACTURER_CODE Whla
@@ -79,6 +79,7 @@ set(WHALE_SOURCES
     Source/UI/PresetBrowser.cpp
     Source/UI/ExpertPanel.cpp
     Source/UI/LicensePanel.cpp
+    Source/UI/WelcomeOverlay.cpp
     Source/License/LicenseManager.cpp)
 
 target_sources(WHALE PRIVATE ${WHALE_SOURCES})

@@ -28,6 +28,10 @@ public:
         juce::String lufsText = "--", targetText, verdictText, caption;
         juce::Colour verdictColour = Theme::dim;
         float meter = 0;            // 0..1 loudness meter
+        // sea floor (1.3): what is heard vs the style's references, 1/3 octaves 25 Hz - 16 kHz
+        bool hasSpectrum = false;
+        float spectrum[29] {}, refMed[29] {}, refLo[29] {}, refHi[29] {};
+        juce::String styleName;
     };
 
     WhaleScene();
@@ -46,6 +50,8 @@ private:
     void drawSurface (juce::Graphics& g);
     void drawSouffle (juce::Graphics& g);
     void drawHud (juce::Graphics& g);
+    void drawSeabed (juce::Graphics& g);
+    void drawPulse (juce::Graphics& g, juce::Colour c);
     void buildBackground();
 
     Input in;
@@ -55,6 +61,14 @@ private:
     float L = 600, H = 70;
     float bandAvg[8] {}, bandE[8] {};
     float kickSm = 0, widthSm = 0;
+    // 1.3: living whale (turquoise when validated, glow + ripples + bubbles on the kick) and sea floor
+    float teal = 0, kickFast = 0, kickPrev = 0, kickCool = 0;
+    struct Ring { float age; };
+    std::vector<Ring> rings;
+    struct Bubble { juce::Point<float> p; float vy, r, life, phase; };
+    std::vector<Bubble> bubbles;
+    float seaShown[29] {}, refShown[29] {}, refLoShown[29] {}, refHiShown[29] {};
+    bool seaInit = false, refInit = false;
     juce::Point<float> flukeTips[2], tail, finTip, blowhole;
 
     // le souffle

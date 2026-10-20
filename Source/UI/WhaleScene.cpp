@@ -7,6 +7,7 @@ namespace
     constexpr float pi = juce::MathConstants<float>::pi;
     inline float clamp01 (float x) { return juce::jlimit (0.0f, 1.0f, x); }
     inline float approach (float cur, float target, float rate, float dt) { return cur + (target - cur) * (1.0f - std::exp (-rate * dt)); }
+    inline float profileHz (int b) { static const float hz[29] = { 25, 31.5f, 40, 50, 63, 80, 100, 125, 160, 200, 250, 315, 400, 500, 630, 800, 1000, 1250, 1600, 2000, 2500, 3150, 4000, 5000, 6300, 8000, 10000, 12500, 16000 }; return hz[b]; }
 }
 
 WhaleScene::WhaleScene()
@@ -95,6 +96,46 @@ void WhaleScene::advance (const Input& input, float dt)
     const bool calm = in.mood == Mood::validated || in.mood == Mood::ok;
 
     kickSm = approach (kickSm, in.kick, 18.0f, dt);
+    // 1.3 living whale: turquoise once validated, a ring + bubbles on each kick
+    teal = approach (teal, in.mood == Mood::validated ? 1.0f : 0.0f, 1.5f, dt);
+    kickFast = approach (kickFast, in.kick, 30.0f, dt);
+    kickCool -= dt;
+    if (! in.reduced && in.mood != Mood::idle && in.kick > 0.5f && kickPrev <= 0.5f && kickCool <= 0.0f)
+    {
+        kickCool = 0.2f;
+        if (rings.size() < 4) rings.push_back ({ 0.0f });
+        for (int i = 0; i < 2 && bubbles.size() < 40; ++i)
+        {
+            const auto p0 = bodyPoint (0.03f + 0.12f * rng.nextFloat(), -0.7f + 0.9f * rng.nextFloat(), 0, 0);
+            bubbles.push_back ({ p0, -(18.0f + 30.0f * rng.nextFloat()), 1.5f + 2.5f * rng.nextFloat(), 1.0f, rng.nextFloat() * 6.28f });
+        }
+    }
+    kickPrev = in.kick;
+    for (auto& r : rings) r.age += dt;
+    rings.erase (std::remove_if (rings.begin(), rings.end(), [] (const Ring& r) { return r.age > 0.9f; }), rings.end());
+    for (auto& b : bubbles)
+    {
+        b.p.y += b.vy * dt;
+        b.p.x += std::sin (b.phase + t * 3.0f) * 9.0f * dt;
+        b.life -= dt * 0.5f;
+        if (b.p.y < surfaceY() + 4.0f) b.life = 0.0f;
+    }
+    bubbles.erase (std::remove_if (bubbles.begin(), bubbles.end(), [] (const Bubble& b) { return b.life <= 0.0f; }), bubbles.end());
+
+    // sea floor: the curves glide towards the latest measurement
+    if (in.hasSpectrum)
+    {
+        for (int b = 0; b < 29; ++b) seaShown[b] = seaInit ? approach (seaShown[b], in.spectrum[b], 2.5f, dt) : in.spectrum[b];
+        seaInit = true;
+    }
+    else seaInit = false;
+    for (int b = 0; b < 29; ++b)
+    {
+        refShown[b]   = refInit ? approach (refShown[b], in.refMed[b], 4.0f, dt) : in.refMed[b];
+        refLoShown[b] = refInit ? approach (refLoShown[b], in.refLo[b], 4.0f, dt) : in.refLo[b];
+        refHiShown[b] = refInit ? approach (refHiShown[b], in.refHi[b], 4.0f, dt) : in.refHi[b];
+    }
+    refInit = true;
     widthSm = approach (widthSm, clamp01 (in.width * 6.0f), 3.0f, dt);
     for (int b = 0; b < 8; ++b)
     {
@@ -231,7 +272,7 @@ void WhaleScene::drawWhale (juce::Graphics& g, juce::Colour ca, juce::Colour cb,
     const int lines = in.reduced ? 14 : 26, segs = in.reduced ? 36 : 64;
     juce::Graphics::ScopedSaveState ss (g);
     g.addTransform (juce::AffineTransform::translation (offset));
-    const float glowAmt = (in.reduced || ghost) ? 0.0f : glow;
+    const float glowAmt = (in.reduced || ghost) ? 0.0f : glow * (0.8f + 0.8f * kickFast);
 
     for (int k = 0; k <= lines; ++k)
     {
@@ -396,6 +437,118 @@ void WhaleScene::drawHud (juce::Graphics& g)
     }
 }
 
+void WhaleScene::drawPulse (juce::Graphics& g, juce::Colour c)
+{
+    if (in.mood == Mood::idle) return;
+    const auto centre = bodyPoint (0.42f, 0.0f, 0, 0);
+    const float rx = L * 0.42f, ry = H * 1.25f;
+    const float a = (0.07f + 0.20f * kickFast) * glow;
+    g.setGradientFill (juce::ColourGradient (c.withAlpha (a), centre.x, centre.y, c.withAlpha (0.0f), centre.x + rx, centre.y, true));
+    g.fillEllipse (centre.x - rx, centre.y - ry, rx * 2.0f, ry * 2.0f);
+    for (auto& r : rings)
+    {
+        const float k = 0.75f + 0.75f * r.age / 0.9f, al = (1.0f - r.age / 0.9f) * 0.45f;
+        g.setColour (c.withAlpha (al));
+        g.drawEllipse (centre.x - rx * k, centre.y - ry * 0.75f * k, rx * 2.0f * k, ry * 1.5f * k, 1.3f);
+    }
+}
+
+void WhaleScene::drawSeabed (juce::Graphics& g)
+{
+    const float w = (float) getWidth(), h = (float) getHeight();
+    const float y1 = h - 10.0f, y0 = h - 84.0f, x0 = 16.0f, x1 = w - 30.0f;
+    const float l0 = std::log10 (22.0f), l1 = std::log10 (18000.0f);
+    auto X = [&] (float f) { return x0 + (std::log10 (f) - l0) / (l1 - l0) * (x1 - x0); };
+    float lo = 1.0e9f, hi = -1.0e9f;
+    for (int b = 2; b < 29; ++b) { lo = juce::jmin (lo, refLoShown[b]); hi = juce::jmax (hi, refHiShown[b]); }
+    lo -= 3.0f; hi += 3.0f;
+    auto Y = [&] (float v) { return juce::jlimit (y0 - 8.0f, y1, y1 - (v - lo) / juce::jmax (1.0f, hi - lo) * (y1 - y0)); };
+
+    // darker water near the floor
+    g.setGradientFill (juce::ColourGradient (juce::Colour (0x00050310), 0, y0 - 24.0f, juce::Colour (0xaa050310), 0, h, false));
+    g.fillRect (0.0f, y0 - 24.0f, w, h - y0 + 24.0f);
+
+    auto curve = [&] (const float* v, float shift)
+    {
+        juce::Path p;
+        for (int b = 0; b < 29; ++b)
+        {
+            const juce::Point<float> q (X (profileHz (b)), Y (v[b] + shift));
+            if (b == 0) p.startNewSubPath (q); else p.lineTo (q);
+        }
+        return p.createPathWithRoundedCorners (40.0f);
+    };
+    // references: inter-quartile band + dashed median
+    {
+        juce::Path band;
+        for (int b = 0; b < 29; ++b) { const juce::Point<float> q (X (profileHz (b)), Y (refHiShown[b])); if (b == 0) band.startNewSubPath (q); else band.lineTo (q); }
+        for (int b = 28; b >= 0; --b) band.lineTo (X (profileHz (b)), Y (refLoShown[b]));
+        band.closeSubPath();
+        g.setColour (violet.withAlpha (0.16f));
+        g.fillPath (band.createPathWithRoundedCorners (30.0f));
+        juce::Path dashed;
+        const float dl[] = { 5.0f, 5.0f };
+        juce::PathStrokeType (1.3f).createDashedStroke (dashed, curve (refShown, 0.0f), dl, 2);
+        g.setColour (juce::Colour (0xffb49cff).withAlpha (0.85f));
+        g.fillPath (dashed);
+    }
+    g.setFont (mono (10.0f, 0.06f));
+    if (! seaInit)
+    {
+        g.setColour (dim.withAlpha (0.8f));
+        g.drawText (fr ("Play your track: its spectrum appears here, over the references of the style"), juce::Rectangle<float> (x0, y0 + 18, x1 - x0, 14), juce::Justification::centred);
+    }
+    else
+    {
+        // what is heard, levelled like the references (200 Hz - 5 kHz)
+        float am = 0, ap = 0;
+        for (int b = 9; b <= 23; ++b) { am += seaShown[b]; ap += refShown[b]; }
+        const float shift = (ap - am) / 15.0f;
+        const auto mix = curve (seaShown, shift);
+        juce::Path fill (mix);
+        fill.lineTo (x1, y1); fill.lineTo (x0, y1); fill.closeSubPath();
+        g.setGradientFill (juce::ColourGradient (green.withAlpha (0.26f), 0, y0, green.withAlpha (0.03f), 0, y1, false));
+        g.fillPath (fill);
+        neon (g, mix, juce::Colour (0xffbffff0), 1.5f, 0.7f);
+        // the two clearest gaps, as arrows towards the references
+        const int rl[] = { 1, 5, 9, 14, 19, 24, 27 }, rh[] = { 4, 8, 13, 18, 23, 26, 28 };
+        const char* names[] = { "sub", "bass", "low-mids", "mids", "presence", "highs", "air" };
+        float ex[7] {};
+        for (int r = 0; r < 7; ++r)
+        {
+            float dev = 0, tol = 0;
+            for (int b = rl[r]; b <= rh[r]; ++b) { dev += seaShown[b] + shift - refShown[b]; tol += juce::jlimit (1.0f, 3.0f, 0.5f * (refHiShown[b] - refLoShown[b])); }
+            const int n = rh[r] - rl[r] + 1; dev /= (float) n; tol /= (float) n;
+            ex[r] = std::abs (dev) > tol ? dev : 0.0f;
+        }
+        for (int k = 0; k < 2; ++k)
+        {
+            int best = -1;
+            for (int r = 0; r < 7; ++r) if (std::abs (ex[r]) >= 1.5f && (best < 0 || std::abs (ex[r]) > std::abs (ex[best]))) best = r;
+            if (best < 0) break;
+            const int bc = (rl[best] + rh[best]) / 2;
+            const float x = X (profileHz (bc)), ya = Y (seaShown[bc] + shift), yb = Y (refShown[bc]);
+            g.setColour (magenta);
+            g.drawLine (x, ya, x, yb, 2.0f);
+            const float dir = yb > ya ? 1.0f : -1.0f;
+            juce::Path tri; tri.addTriangle (x - 5.0f, yb - dir * 7.0f, x + 5.0f, yb - dir * 7.0f, x, yb);
+            g.fillPath (tri);
+            const juce::String lab = (ex[best] > 0 ? "+" : "") + juce::String (ex[best], 1) + " dB " + names[best];
+            g.drawText (lab, juce::Rectangle<float> (x + 8.0f, juce::jmin (ya, yb) - 2.0f, 140.0f, 13.0f), juce::Justification::centredLeft);
+            ex[best] = 0.0f;
+        }
+    }
+    // legend + frequency marks
+    g.setColour (juce::Colour (0xffbffff0).withAlpha (seaInit ? 0.95f : 0.4f));
+    g.drawText (fr ("\xe2\x80\x94 YOUR SOUND"), juce::Rectangle<float> (x1 - 290, y0 - 22, 290, 12), juce::Justification::centredRight);
+    g.setColour (juce::Colour (0xffb49cff));
+    g.drawText (fr ("- - REFERENCES \xc2\xb7 ") + in.styleName, juce::Rectangle<float> (x1 - 290, y0 - 9, 290, 12), juce::Justification::centredRight);
+    g.setColour (faint);
+    g.setFont (mono (9.0f));
+    for (float f : { 50.0f, 100.0f, 500.0f, 1000.0f, 5000.0f, 10000.0f })
+        g.drawText (f >= 1000.0f ? juce::String ((int) (f / 1000.0f)) + "k" : juce::String ((int) f), juce::Rectangle<float> (X (f) - 15, y1 - 11, 30, 10), juce::Justification::centred);
+}
+
 void WhaleScene::paint (juce::Graphics& g)
 {
     g.drawImageAt (background, 0, 0);
@@ -404,13 +557,16 @@ void WhaleScene::paint (juce::Graphics& g)
         g.setColour (p.c);
         g.fillEllipse (p.p.x, p.p.y, p.size, p.size);
     }
+    drawSeabed (g);
     drawSurface (g);
 
     juce::Colour ca = magenta, cb = cyan;
     if (in.mood == Mood::validated) { ca = violet; cb = cyan; }
+    if (teal > 0.001f) { ca = ca.interpolatedWith (juce::Colour (0xff35d6be), teal * 0.9f); cb = cb.interpolatedWith (juce::Colour (0xff86f7e6), teal * 0.9f); }
     if (hot > 0.01f) { ca = ca.interpolatedWith (juce::Colour (0xffff5ab4), hot); cb = cb.interpolatedWith (orange, hot); }
     const float alpha = in.mood == Mood::idle ? 0.55f : 1.0f;
 
+    if (! in.reduced) drawPulse (g, hot > 0.3f ? orange : cb);
     if (in.mood == Mood::phase)
         drawWhale (g, red, orange, 0.35f, { -H * 0.35f, H * 0.18f }, true);
     drawWhale (g, ca, cb, alpha, {}, false);
@@ -420,6 +576,11 @@ void WhaleScene::paint (juce::Graphics& g)
     {
         g.setColour ((s.life > 0.5f ? juce::Colour (0xffffdc78) : red).withAlpha (clamp01 (s.life)));
         g.drawLine ({ s.a, s.b }, 1.4f);
+    }
+    for (auto& b : bubbles)
+    {
+        g.setColour (juce::Colour (0xffd8fff6).withAlpha (clamp01 (b.life) * 0.7f));
+        g.drawEllipse (b.p.x - b.r, b.p.y - b.r, b.r * 2.0f, b.r * 2.0f, 1.0f);
     }
     drawSouffle (g);
     drawHud (g);

@@ -147,19 +147,59 @@ MacroKnob::MacroKnob (juce::AudioProcessorValueTreeState& st, const char* id, co
 
 void MacroKnob::resized()
 {
-    slider.setBounds (getLocalBounds().withHeight (getWidth()));
+    // a small margin around the knob for the AUTO diamond on the tick ring
+    slider.setBounds (4, 6, getWidth() - 8, getWidth() - 8);
 }
 
 void MacroKnob::paint (juce::Graphics& g)
 {
-    const int top = getWidth() + 2;
+    const int top = slider.getBottom() + 2;
     g.setColour (juce::Colour (0xffd6ccf0));
     g.setFont (bold (13.0f, 0.04f));
     g.drawText (name, 0, top, getWidth(), 16, juce::Justification::centred);
-    g.setColour (dim);
     g.setFont (mono (11.0f));
+    if (autoText.isNotEmpty())
+    {
+        g.setColour (autoMoved ? text : dim);
+        g.drawText (autoText, 0, top + 17, getWidth(), 14, juce::Justification::centred);
+        return;
+    }
+    g.setColour (dim);
     const int v = juce::roundToInt ((slider.getValue() - 0.5) * 200.0);
     g.drawText (v == 0 ? juce::String ("0") : (v > 0 ? "+" : "") + juce::String (v), 0, top + 17, getWidth(), 14, juce::Justification::centred);
+}
+
+void MacroKnob::setAutoInfo (float basePos, float effPos, const juce::String& valueText, bool moved)
+{
+    if (std::abs (basePos - autoBase) < 0.002f && std::abs (effPos - autoEff) < 0.002f && valueText == autoText && moved == autoMoved) return;
+    autoBase = basePos; autoEff = effPos; autoText = valueText; autoMoved = moved;
+    repaint();
+}
+
+// The diamond sits on the tick ring where AUTO (or the preset) set the module; the dot is what is heard with the nudge.
+void MacroKnob::paintOverChildren (juce::Graphics& g)
+{
+    if (autoBase < 0.0f) return;
+    const auto sb = slider.getBounds().toFloat();
+    const float r = juce::jmin (sb.getWidth(), sb.getHeight()) * 0.5f - 10.0f;
+    const float cx = sb.getCentreX(), cy = sb.getCentreY();
+    const auto rp = slider.getRotaryParameters();
+    auto at = [&] (float pos, float rad) { const float a = rp.startAngleRadians + (rp.endAngleRadians - rp.startAngleRadians) * juce::jlimit (0.0f, 1.0f, pos) - juce::MathConstants<float>::halfPi;
+                                           return juce::Point<float> (cx + rad * std::cos (a), cy + rad * std::sin (a)); };
+    if (autoMoved)
+    {
+        const auto d = at (autoEff, r + 8.5f);
+        g.setColour (green);
+        g.fillEllipse (d.x - 2.6f, d.y - 2.6f, 5.2f, 5.2f);
+    }
+    const auto p = at (autoBase, r + 8.5f);
+    juce::Path dia;
+    const float s = 4.6f;
+    dia.startNewSubPath (p.x, p.y - s); dia.lineTo (p.x + s, p.y); dia.lineTo (p.x, p.y + s); dia.lineTo (p.x - s, p.y); dia.closeSubPath();
+    g.setColour (bg.withAlpha (0.9f));
+    g.fillPath (dia);
+    g.setColour (juce::Colours::white.withAlpha (0.95f));
+    g.strokePath (dia, juce::PathStrokeType (1.4f));
 }
 
 // ------------------------------------------------------------------------------------------- AutoButton
@@ -238,7 +278,7 @@ juce::Rectangle<float> ChainStrip::chipBounds (int i) const
 {
     const float labelW = 64.0f, gap = 26.0f;
     const float w = ((float) getWidth() - labelW - gap * 6.0f) / 7.0f;
-    return { labelW + (float) i * (w + gap), 4.0f, w, (float) getHeight() - 8.0f };
+    return { labelW + (float) i * (w + gap), 16.0f, w, (float) getHeight() - 19.0f };
 }
 
 void ChainStrip::paint (juce::Graphics& g)
@@ -246,11 +286,24 @@ void ChainStrip::paint (juce::Graphics& g)
     const char* ids[7] = { PID::specOn, PID::compOn, PID::satOn, PID::widthOn, PID::toneOn, PID::clipOn, nullptr };
     g.setColour (dim);
     g.setFont (mono (11.0f, 0.08f));
-    g.drawText (fr ("CHAIN"), 0, 0, 64, getHeight(), juce::Justification::centredLeft);
+    g.drawText (fr ("CHAIN"), 0, 14, 64, getHeight() - 14, juce::Justification::centredLeft);
     for (int i = 0; i < 7; ++i)
     {
         const auto r = chipBounds (i);
         const bool on = ids[i] == nullptr || state.getRawParameterValue (ids[i])->load() > 0.5f;
+        const float act = on ? juce::jlimit (0.0f, 1.0f, activity[(size_t) i]) : 0.0f;
+        const juce::Colour lit = (i == 1 || i == 5 || i == 6) ? magenta : green;    // dynamics in magenta, tone in green
+        if (act > 0.03f)                       // 1.3: the module lights up while it works
+        {
+            juce::Path chip; chip.addRoundedRectangle (r.expanded (1.0f), 9.0f);
+            neon (g, chip, lit.withAlpha (0.35f + 0.6f * act), 1.4f, act);
+        }
+        if (on && values[(size_t) i].isNotEmpty())
+        {
+            g.setColour (lit.withAlpha (0.55f + 0.45f * act));
+            g.setFont (mono (10.0f));
+            g.drawText (values[(size_t) i], r.withY (0.0f).withHeight (14.0f).withTrimmedRight (4.0f), juce::Justification::centredRight);
+        }
         g.setColour (i == selected ? juce::Colour (0xff2a1450) : field);
         g.fillRoundedRectangle (r, 8.0f);
         g.setColour (i == selected ? magenta : line.brighter (0.2f));
@@ -264,8 +317,8 @@ void ChainStrip::paint (juce::Graphics& g)
         const juce::Rectangle<float> bar (r.getRight() - 15, r.getY() + 7, 5, r.getHeight() - 14);
         g.setColour (line);
         g.fillRoundedRectangle (bar, 2.0f);
-        const float a = on ? juce::jlimit (0.0f, 1.0f, activity[(size_t) i]) : 0.0f;
-        g.setColour (magenta);
+        const float a = act;
+        g.setColour (lit);
         g.fillRoundedRectangle (bar.withTop (bar.getBottom() - bar.getHeight() * a), 2.0f);
         if (i < 6)
         {

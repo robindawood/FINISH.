@@ -591,6 +591,7 @@ namespace
         WhaleAudioProcessor p;
         p.prepareToPlay (sr, block);
         std::unique_ptr<WhaleEditor> ed (dynamic_cast<WhaleEditor*> (p.createEditor()));
+        ed->showWelcome (false);
         FileSource src;
         if (! src.load (juce::File (wav), 60.0)) { std::cout << "cannot read " << wav << "\n"; ++failures; return; }
         juce::AudioBuffer<float> buf (2, block);
@@ -620,6 +621,15 @@ namespace
         for (int i = 0; i < 240 && p.getAutoState() != WhaleAudioProcessor::AutoState::done; ++i) play (1.0);
         play (12.0);
         shot (TestAccess::content (*ed), "promo_main.png");
+        setParam (p, PID::mPunch, 0.65f); setParam (p, PID::mBass, 0.35f); play (2.0);
+        shot (TestAccess::content (*ed), "promo_main_nudged.png");
+        setParam (p, PID::mPunch, 0.5f); setParam (p, PID::mBass, 0.5f); play (0.5);
+        ed->showWelcome (true); play (0.3);
+        shot (TestAccess::content (*ed), "promo_welcome.png");
+        ed->showWelcome (false);
+        TestAccess::showLicence (*ed, true); play (0.3);
+        shot (TestAccess::content (*ed), "promo_licence.png");
+        TestAccess::showLicence (*ed, false);
         TestAccess::openExpert (*ed, 7); play (0.5);
         shot (TestAccess::content (*ed), "promo_report.png");
         TestAccess::openExpert (*ed, 0); play (1.0);
@@ -641,6 +651,7 @@ namespace
         p.setRateAndBufferSizeDetails (sr, fb);
         p.prepareToPlay (sr, fb);
         std::unique_ptr<WhaleEditor> ed (dynamic_cast<WhaleEditor*> (p.createEditor()));
+        ed->showWelcome (false);
         juce::AudioFormatManager fm; fm.registerBasicFormats();
         std::unique_ptr<juce::AudioFormatReader> rd (fm.createReaderFor (juce::File (wav)));
         if (rd == nullptr) { ++failures; return; }
@@ -731,6 +742,7 @@ namespace
         WhaleAudioProcessor p;
         p.prepareToPlay (sr, block);
         std::unique_ptr<WhaleEditor> ed (dynamic_cast<WhaleEditor*> (p.createEditor()));
+        ed->showWelcome (false);
         FileSource src;
         bool haveFile = wav.isNotEmpty() && src.load (juce::File (wav), 60.0);
         MixGen gen; gen.gainDb = -16.0f;
