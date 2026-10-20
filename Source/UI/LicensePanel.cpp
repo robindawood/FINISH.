@@ -1,3 +1,4 @@
+#include "Brand.h"
 #include "../Version.h"
 #include "LicensePanel.h"
 
@@ -109,7 +110,11 @@ void LicensePanel::paint (juce::Graphics& g)
     g.drawText ("WHALE MASTERING", x, y + 54, w, 28, juce::Justification::centred);
     g.setColour (faint);
     g.setFont (mono (10.5f, 0.12f));
-    g.drawText (juce::String ("v") + WHALE_VERSION_STRING + fr ("  \xc2\xb7  BY RAWDIO LABS"), x, (int) c.getBottom() - 26, w, 14, juce::Justification::centred);
+    {
+        const float lh = 16.0f, lw = Brand::lockupWidth (lh), lx = c.getCentreX() - lw * 0.5f;
+        Brand::drawLockup (g, lx, c.getBottom() - 34.0f, lh, 0.9f);
+        g.drawText (juce::String ("v") + WHALE_VERSION_STRING, (int) c.getRight() - 120, (int) c.getBottom() - 26, 100, 14, juce::Justification::centredRight);
+    }
 
     const auto st = lic.getStatus();
     g.setFont (bold (14.0f));

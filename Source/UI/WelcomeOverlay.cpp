@@ -1,3 +1,4 @@
+#include "Brand.h"
 #include "WelcomeOverlay.h"
 
 using namespace Theme;
@@ -89,7 +90,13 @@ void WelcomeOverlay::paint (juce::Graphics& g)
     g.drawText (fr ("Shown on first launch only \xc2\xb7 menu \xe2\x89\xa1 > Quick tour to see it again"), juce::Rectangle<float> (0, 416, w, 18), juce::Justification::centred);
     g.setColour (faint);
     g.setFont (mono (11.0f, 0.12f));
-    g.drawText (fr ("WHALE MASTERING  \xc2\xb7  BY RAWDIO LABS"), juce::Rectangle<float> (0, 446, w, 16), juce::Justification::centred);
+    {
+        const juce::String by = fr ("WHALE MASTERING  \xc2\xb7  BY");
+        const float tw = juce::GlyphArrangement::getStringWidth (g.getCurrentFont(), by), lh = 18.0f, lw = Brand::lockupWidth (lh);
+        const float x0 = w * 0.5f - (tw + 10.0f + lw) * 0.5f;
+        g.drawText (by, juce::Rectangle<float> (x0, 446, tw + 4, 16), juce::Justification::centredLeft);
+        Brand::drawLockup (g, x0 + tw + 10.0f, 454.0f, lh, 0.95f);
+    }
 }
 
 void WelcomeOverlay::mouseUp (const juce::MouseEvent& e)

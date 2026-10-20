@@ -16,7 +16,7 @@ public:
     static constexpr int trialDays = 7;
     static constexpr int maxActivations = 5;        // computers per key (reinstalls, a laptop + a studio machine)
     static constexpr const char* productId = "WB5KMMK6rbdoT9Vr-bsfhg==";
-    static constexpr const char* supportEmail = "mr.winkbeats@gmail.com";
+    static constexpr const char* supportEmail = "rawdio.labs@gmail.com";
     static constexpr const char* buyUrl = "";       // Gumroad product page; empty = link hidden until the product is published
 
     struct VerifyReply

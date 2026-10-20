@@ -62,7 +62,9 @@ juce_add_binary_data(WhaleAssets
         Resources/Fonts/Unbounded-Regular.ttf
         Resources/Fonts/Manrope-Medium.ttf
         Resources/Fonts/Manrope-Bold.ttf
-        Resources/Fonts/JetBrainsMono-Medium.ttf)
+        Resources/Fonts/JetBrainsMono-Medium.ttf
+        Resources/Brand/rawdio-symbol-cyan.svg
+        Resources/Brand/rawdio-wordmark-white.svg)
 set_target_properties(WhaleAssets PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 set(WHALE_SOURCES

@@ -1,4 +1,5 @@
 #include "PluginEditor.h"
+#include "UI/Brand.h"
 
 using namespace Theme;
 
@@ -161,6 +162,7 @@ void WhaleEditor::Content::paint (juce::Graphics& g)
     g.setColour (dim);
     g.setFont (mono (11.0f, 0.12f));
     g.drawText ("MASTERING", 180, 12, 120, 34, juce::Justification::centredLeft);
+    Brand::drawLockup (g, 821.0f, 29.0f, 15.0f, 0.85f);     // Rawdio Labs, between the preset bar and BEFORE / AFTER
 
     // bottom panel
     g.setColour (juce::Colour (0xff08051a));
